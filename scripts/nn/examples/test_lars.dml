@@ -1,0 +1,106 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * Simple test script for LARS optimizer
+ */
+
+source("../optim/lars.dml") as lars
+source("../optim/sgd_momentum.dml") as sgd_momentum
+
+print("Testing LARS optimizer...")
+
+# Create a simple test case
+X = matrix(0, rows=2, cols=3)
+X[1,1] = 1; X[1,2] = 2; X[1,3] = 3
+X[2,1] = 4; X[2,2] = 5; X[2,3] = 6
+
+dX = matrix(0, rows=2, cols=3)
+dX[1,1] = 0.1; dX[1,2] = 0.2; dX[1,3] = 0.3
+dX[2,1] = 0.4; dX[2,2] = 0.5; dX[2,3] = 0.6
+
+print("\nInitial parameters X:")
+print(toString(X))
+print("\nGradients dX:")
+print(toString(dX))
+
+# Test parameters
+lr = 0.1
+mu = 0.9
+lambda = 0.01
+trust_coeff = 0.001
+
+# Initialize momentum
+v = lars::init(X)
+
+print("\n--- Testing LARS update ---")
+
+# Compute norms for understanding
+X_norm = sqrt(sum(X^2))
+dX_wd = dX + lambda * X
+dX_norm = sqrt(sum(dX_wd^2))
+local_lr = trust_coeff * X_norm / (dX_norm + 1e-8)
+effective_lr = lr * local_lr
+
+print("Weight norm ||X||: " + X_norm)
+print("Gradient norm ||dX + lambda*X||: " + dX_norm)
+print("Local learning rate: " + local_lr)
+print("Effective learning rate: " + effective_lr)
+
+# Perform LARS update
+[X_new, v_new] = lars::update(X, dX, lr, mu, v, lambda, trust_coeff)
+
+print("\nUpdated parameters X_new:")
+print(toString(X_new))
+print("\nUpdated velocity v_new:")
+print(toString(v_new))
+
+# Compare with regular SGD+momentum
+print("\n--- Comparing with SGD+Momentum ---")
+v_sgd = sgd_momentum::init(X)
+[X_sgd, v_sgd] = sgd_momentum::update(X, dX + lambda*X, lr, mu, v_sgd)
+
+print("SGD+Momentum updated X:")
+print(toString(X_sgd))
+
+print("\nDifference (LARS - SGD):")
+print(toString(X_new - X_sgd))
+
+print("\n--- Testing with small weights (bias-like) ---")
+X_small = matrix(0, rows=2, cols=2)
+X_small[1,1] = 0.0001; X_small[1,2] = 0.0002
+X_small[2,1] = 0.0003; X_small[2,2] = 0.0004
+
+dX_small = matrix(0, rows=2, cols=2)
+dX_small[1,1] = 0.1; dX_small[1,2] = 0.2
+dX_small[2,1] = 0.3; dX_small[2,2] = 0.4
+
+v_small = lars::init(X_small)
+
+print("\nSmall weights X:")
+print(toString(X_small))
+
+[X_small_new, v_small_new] = lars::update(X_small, dX_small, lr, mu, v_small, lambda, trust_coeff)
+
+print("Updated small weights:")
+print(toString(X_small_new))
+
+print("\nLARS test complete!") 

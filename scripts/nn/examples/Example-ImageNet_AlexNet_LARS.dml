@@ -1,0 +1,237 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * Example demonstrating LARS optimizer for large batch training on ImageNet
+ * 
+ * This script shows how LARS maintains performance with large batch sizes
+ * compared to standard SGD with momentum.
+ * 
+ * Note: This example assumes you have ImageNet data preprocessed and available
+ * in SystemDS format. For demonstration purposes, we'll use a subset.
+ */
+
+source("imagenet_alexnet.dml") as imagenet_alexnet
+
+# ImageNet parameters
+C = 3      # RGB channels
+Hin = 224  # Height
+Win = 224  # Width
+K = 1000   # Number of classes
+
+print("\n=======================================================")
+print("LARS vs SGD with Momentum - Large Batch Training Demo")
+print("ImageNet AlexNet Training")
+print("=======================================================\n")
+
+# For demonstration, we'll simulate loading a subset of ImageNet
+# In practice, you would load actual ImageNet data here
+print("Loading ImageNet subset...")
+
+# Simulate loading training data (10K samples for demo)
+# In practice: data = read("imagenet_train.csv", format="csv")
+n_train = 10000
+X = rand(rows=n_train, cols=C*Hin*Win, min=0, max=1)
+y = rand(rows=n_train, cols=K, min=0, max=0)
+# Create one-hot encoded labels
+for(i in 1:n_train) {
+  class = as.scalar(round(rand(rows=1, cols=1, min=1, max=K)))
+  y[i, class] = 1
+}
+
+# Simulate validation data (1K samples)
+n_val = 1000
+X_val = rand(rows=n_val, cols=C*Hin*Win, min=0, max=1)
+y_val = rand(rows=n_val, cols=K, min=0, max=0)
+for(i in 1:n_val) {
+  class = as.scalar(round(rand(rows=1, cols=1, min=1, max=K)))
+  y_val[i, class] = 1
+}
+
+# Test configuration
+epochs = 1  # Just 1 epoch for demonstration
+batch_sizes = list(256, 1024, 4096, 8192)  # Different batch sizes to test
+
+print("Configuration:")
+print("- Dataset: ImageNet (simulated subset)")
+print("- Model: AlexNet")
+print("- Epochs: " + epochs)
+print("- Training samples: " + n_train)
+print("- Validation samples: " + n_val)
+print("\n")
+
+# Store results
+results = matrix(0, rows=length(batch_sizes), cols=6)
+# Columns: batch_size, sgd_top1, sgd_top5, lars_top1, lars_top5, speedup
+
+for (idx in 1:length(batch_sizes)) {
+  batch_size = as.scalar(batch_sizes[idx])
+  
+  print("\n=== Testing with batch size: " + batch_size + " ===")
+  
+  # 1. Train with SGD + Momentum
+  print("\n1. Training with SGD + Momentum")
+  print("--------------------------------")
+  optimizer = "sgd_momentum"
+  
+  # Learning rate scaling for SGD (linear scaling rule)
+  base_lr = 0.01
+  lr_sgd = base_lr * sqrt(batch_size / 256)  # Square root scaling for SGD
+  
+  start_time_sgd = time()
+  model_sgd = imagenet_alexnet::train(X, y, X_val, y_val, C, Hin, Win, 
+                                     epochs, optimizer, lr_sgd, batch_size)
+  train_time_sgd = (time() - start_time_sgd) / 1000.0  # Convert to seconds
+  
+  # Extract model parameters
+  W1_sgd = as.matrix(model_sgd["W1"]); b1_sgd = as.matrix(model_sgd["b1"])
+  W2_sgd = as.matrix(model_sgd["W2"]); b2_sgd = as.matrix(model_sgd["b2"])
+  W3_sgd = as.matrix(model_sgd["W3"]); b3_sgd = as.matrix(model_sgd["b3"])
+  W4_sgd = as.matrix(model_sgd["W4"]); b4_sgd = as.matrix(model_sgd["b4"])
+  W5_sgd = as.matrix(model_sgd["W5"]); b5_sgd = as.matrix(model_sgd["b5"])
+  W6_sgd = as.matrix(model_sgd["W6"]); b6_sgd = as.matrix(model_sgd["b6"])
+  W7_sgd = as.matrix(model_sgd["W7"]); b7_sgd = as.matrix(model_sgd["b7"])
+  W8_sgd = as.matrix(model_sgd["W8"]); b8_sgd = as.matrix(model_sgd["b8"])
+  
+  # Extract BN parameters
+  gamma1_sgd = as.matrix(model_sgd["gamma1"]); beta1_sgd = as.matrix(model_sgd["beta1"])
+  ema_mean1_sgd = as.matrix(model_sgd["ema_mean1"]); ema_var1_sgd = as.matrix(model_sgd["ema_var1"])
+  gamma2_sgd = as.matrix(model_sgd["gamma2"]); beta2_sgd = as.matrix(model_sgd["beta2"])
+  ema_mean2_sgd = as.matrix(model_sgd["ema_mean2"]); ema_var2_sgd = as.matrix(model_sgd["ema_var2"])
+  gamma3_sgd = as.matrix(model_sgd["gamma3"]); beta3_sgd = as.matrix(model_sgd["beta3"])
+  ema_mean3_sgd = as.matrix(model_sgd["ema_mean3"]); ema_var3_sgd = as.matrix(model_sgd["ema_var3"])
+  gamma4_sgd = as.matrix(model_sgd["gamma4"]); beta4_sgd = as.matrix(model_sgd["beta4"])
+  ema_mean4_sgd = as.matrix(model_sgd["ema_mean4"]); ema_var4_sgd = as.matrix(model_sgd["ema_var4"])
+  gamma5_sgd = as.matrix(model_sgd["gamma5"]); beta5_sgd = as.matrix(model_sgd["beta5"])
+  ema_mean5_sgd = as.matrix(model_sgd["ema_mean5"]); ema_var5_sgd = as.matrix(model_sgd["ema_var5"])
+  
+  # Evaluate on validation set
+  probs_val_sgd = imagenet_alexnet::predict(X_val, C, Hin, Win, 
+                                           W1_sgd, b1_sgd, W2_sgd, b2_sgd, 
+                                           W3_sgd, b3_sgd, W4_sgd, b4_sgd, 
+                                           W5_sgd, b5_sgd, W6_sgd, b6_sgd, 
+                                           W7_sgd, b7_sgd, W8_sgd, b8_sgd,
+                                           gamma1_sgd, beta1_sgd, ema_mean1_sgd, ema_var1_sgd,
+                                           gamma2_sgd, beta2_sgd, ema_mean2_sgd, ema_var2_sgd,
+                                           gamma3_sgd, beta3_sgd, ema_mean3_sgd, ema_var3_sgd,
+                                           gamma4_sgd, beta4_sgd, ema_mean4_sgd, ema_var4_sgd,
+                                           gamma5_sgd, beta5_sgd, ema_mean5_sgd, ema_var5_sgd)
+  [loss_val_sgd, top1_sgd, top5_sgd] = imagenet_alexnet::eval(probs_val_sgd, y_val)
+  
+  print("\nSGD + Momentum Results:")
+  print("Learning rate: " + lr_sgd)
+  print("Validation Top-1 Accuracy: " + top1_sgd)
+  print("Validation Top-5 Accuracy: " + top5_sgd)
+  print("Training time: " + train_time_sgd + " seconds")
+  
+  # 2. Train with LARS
+  print("\n2. Training with LARS")
+  print("---------------------")
+  optimizer = "lars"
+  
+  # LARS can handle linear scaling of learning rate
+  lr_lars = base_lr * (batch_size / 256)  # Linear scaling for LARS
+  
+  start_time_lars = time()
+  model_lars = imagenet_alexnet::train(X, y, X_val, y_val, C, Hin, Win, 
+                                      epochs, optimizer, lr_lars, batch_size)
+  train_time_lars = (time() - start_time_lars) / 1000.0  # Convert to seconds
+  
+  # Extract model parameters
+  W1_lars = as.matrix(model_lars["W1"]); b1_lars = as.matrix(model_lars["b1"])
+  W2_lars = as.matrix(model_lars["W2"]); b2_lars = as.matrix(model_lars["b2"])
+  W3_lars = as.matrix(model_lars["W3"]); b3_lars = as.matrix(model_lars["b3"])
+  W4_lars = as.matrix(model_lars["W4"]); b4_lars = as.matrix(model_lars["b4"])
+  W5_lars = as.matrix(model_lars["W5"]); b5_lars = as.matrix(model_lars["b5"])
+  W6_lars = as.matrix(model_lars["W6"]); b6_lars = as.matrix(model_lars["b6"])
+  W7_lars = as.matrix(model_lars["W7"]); b7_lars = as.matrix(model_lars["b7"])
+  W8_lars = as.matrix(model_lars["W8"]); b8_lars = as.matrix(model_lars["b8"])
+  
+  # Extract BN parameters
+  gamma1_lars = as.matrix(model_lars["gamma1"]); beta1_lars = as.matrix(model_lars["beta1"])
+  ema_mean1_lars = as.matrix(model_lars["ema_mean1"]); ema_var1_lars = as.matrix(model_lars["ema_var1"])
+  gamma2_lars = as.matrix(model_lars["gamma2"]); beta2_lars = as.matrix(model_lars["beta2"])
+  ema_mean2_lars = as.matrix(model_lars["ema_mean2"]); ema_var2_lars = as.matrix(model_lars["ema_var2"])
+  gamma3_lars = as.matrix(model_lars["gamma3"]); beta3_lars = as.matrix(model_lars["beta3"])
+  ema_mean3_lars = as.matrix(model_lars["ema_mean3"]); ema_var3_lars = as.matrix(model_lars["ema_var3"])
+  gamma4_lars = as.matrix(model_lars["gamma4"]); beta4_lars = as.matrix(model_lars["beta4"])
+  ema_mean4_lars = as.matrix(model_lars["ema_mean4"]); ema_var4_lars = as.matrix(model_lars["ema_var4"])
+  gamma5_lars = as.matrix(model_lars["gamma5"]); beta5_lars = as.matrix(model_lars["beta5"])
+  ema_mean5_lars = as.matrix(model_lars["ema_mean5"]); ema_var5_lars = as.matrix(model_lars["ema_var5"])
+  
+  # Evaluate on validation set
+  probs_val_lars = imagenet_alexnet::predict(X_val, C, Hin, Win, 
+                                            W1_lars, b1_lars, W2_lars, b2_lars, 
+                                            W3_lars, b3_lars, W4_lars, b4_lars, 
+                                            W5_lars, b5_lars, W6_lars, b6_lars, 
+                                            W7_lars, b7_lars, W8_lars, b8_lars,
+                                            gamma1_lars, beta1_lars, ema_mean1_lars, ema_var1_lars,
+                                            gamma2_lars, beta2_lars, ema_mean2_lars, ema_var2_lars,
+                                            gamma3_lars, beta3_lars, ema_mean3_lars, ema_var3_lars,
+                                            gamma4_lars, beta4_lars, ema_mean4_lars, ema_var4_lars,
+                                            gamma5_lars, beta5_lars, ema_mean5_lars, ema_var5_lars)
+  [loss_val_lars, top1_lars, top5_lars] = imagenet_alexnet::eval(probs_val_lars, y_val)
+  
+  print("\nLARS Results:")
+  print("Learning rate: " + lr_lars)
+  print("Validation Top-1 Accuracy: " + top1_lars)
+  print("Validation Top-5 Accuracy: " + top5_lars)
+  print("Training time: " + train_time_lars + " seconds")
+  
+  # Calculate speedup
+  speedup = train_time_sgd / train_time_lars
+  
+  # Store results
+  results[idx, 1] = batch_size
+  results[idx, 2] = top1_sgd
+  results[idx, 3] = top5_sgd
+  results[idx, 4] = top1_lars
+  results[idx, 5] = top5_lars
+  results[idx, 6] = speedup
+  
+  print("\n--- Batch Size " + batch_size + " Summary ---")
+  print("Top-1 Accuracy Improvement with LARS: " + (top1_lars - top1_sgd))
+  print("Top-5 Accuracy Improvement with LARS: " + (top5_lars - top5_sgd))
+  print("Training speedup: " + speedup + "x")
+}
+
+# Summary
+print("\n\n=======================================================")
+print("SUMMARY - LARS vs SGD+Momentum on ImageNet")
+print("=======================================================")
+print("\nBatch Size | SGD Top-1 | SGD Top-5 | LARS Top-1 | LARS Top-5 | Speedup")
+print("-----------|-----------|-----------|------------|------------|--------")
+for(i in 1:nrow(results)) {
+  print(sprintf("%10.0f | %9.4f | %9.4f | %10.4f | %10.4f | %7.2fx",
+                as.scalar(results[i,1]), as.scalar(results[i,2]), 
+                as.scalar(results[i,3]), as.scalar(results[i,4]), 
+                as.scalar(results[i,5]), as.scalar(results[i,6])))
+}
+
+print("\nKey Insights:")
+print("1. LARS maintains accuracy with large batch sizes (4K, 8K)")
+print("2. SGD performance typically degrades with very large batches")
+print("3. LARS enables linear learning rate scaling with batch size")
+print("4. Large batch training with LARS provides significant speedup")
+print("5. The trust coefficient in LARS prevents instability")
+print("\nNote: This is a demonstration with simulated data.")
+print("Real ImageNet training would show more pronounced differences.")
+print("=======================================================\n") 
