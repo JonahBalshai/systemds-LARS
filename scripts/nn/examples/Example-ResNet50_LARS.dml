@@ -42,9 +42,9 @@ source("nn/networks/resnet50_LARS.dml") as resnet50
 
 # Import utility functions
 source("nn/util.dml") as util
+source("nn/optim/lars_util.dml") as lars_util
 source("nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
 source("nn/layers/l2_reg.dml") as l2_reg
-source("nn/optim/lars.dml") as lars
 
 # Main training script
 train_resnet50_lars = function(int batch_size=4096, int epochs=-1, double base_lr=-1.0)
@@ -148,7 +148,7 @@ train_resnet50_lars = function(int batch_size=4096, int epochs=-1, double base_l
     
     for (iter in 1:iters_per_epoch) {
       # Get learning rate with warmup and decay
-      lr = lars::get_lr_with_warmup(base_lr, epoch, iter, epochs, 
+      lr = lars_util::get_lr_with_warmup(base_lr, epoch, iter, epochs, 
                                        iters_per_epoch, batch_size, 
                                        base_batch_size, warmup_epochs, decay_power)
       
