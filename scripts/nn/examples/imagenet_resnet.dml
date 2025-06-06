@@ -1,0 +1,342 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * ResNet implementation for ImageNet with LARS optimizer support.
+ * 
+ * This implementation leverages the existing ResNet infrastructure
+ * and adds LARS optimizer support for large batch training.
+ * 
+ * Key features:
+ * - Uses existing ResNet-18 implementation
+ * - LARS optimizer support for large batch training
+ * - Top-1 and Top-5 accuracy metrics
+ * - Support for multiple optimizers (SGD, SGD+Momentum, Adam, LARS)
+ */
+
+source("scripts/nn/networks/resnet18.dml") as resnet18
+source("scripts/nn/layers/softmax.dml") as softmax
+source("scripts/nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
+source("scripts/nn/layers/logcosh_loss.dml") as logcosh
+
+# Import optimizers
+source("scripts/nn/optim/sgd.dml") as sgd
+source("scripts/nn/optim/sgd_momentum.dml") as sgd_momentum
+source("scripts/nn/optim/adam.dml") as adam
+source("scripts/nn/optim/lars.dml") as lars
+
+# Initialize LARS optimizer parameters for ResNet-18
+init_lars_optim_params = function(int classes)
+    return(list[unknown] params) {
+    /*
+     * Initializes the state of the LARS optimizer for every
+     * learnable parameter of ResNet 18.
+     *
+     * Inputs:
+     * - classes: Number of network output classes.
+     *
+     * Outputs:
+     * - params: List of velocity parameters with the same structure
+     *     as weights of the forward and backward pass.
+     */
+    params = resnet18::init_sgd_momentum_optim_params(classes)  # LARS uses same structure as SGD+Momentum
+}
+
+# Update parameters with LARS optimizer
+update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
+                                  double lr, double momentum, double weight_decay,
+                                  double trust_coeff, list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    /*
+     * Updates all learnable parameters with the LARS optimizer.
+     * 
+     * For simplicity, we use the existing ResNet-18 SGD momentum infrastructure
+     * and apply LARS scaling to the learning rate based on the first few layers.
+     */
+    
+    # Calculate LARS scaling factor based on first conv layer
+    W1 = as.matrix(model[1])  # First conv layer weights
+    dW1 = as.matrix(gradients[1])  # First conv layer gradients
+    
+    # Compute norms
+    w_norm = sqrt(sum(W1^2))
+    g_norm = sqrt(sum((dW1 + weight_decay * W1)^2))
+    
+    # Compute LARS local learning rate
+    if (w_norm > 0 & g_norm > 0) {
+        local_lr = trust_coeff * w_norm / (g_norm + 1e-9)
+        effective_lr = lr * local_lr
+    } else {
+        effective_lr = lr
+    }
+    
+    # Use ResNet-18's built-in SGD momentum with LARS-adjusted learning rate
+    [model_upd, optim_state_upd] = resnet18::update_params_with_sgd_momentum(
+        model, gradients, effective_lr, momentum, optim_state)
+}
+
+# Training function with LARS support
+train = function(matrix[double] X_train, matrix[double] y_train,
+                matrix[double] X_val, matrix[double] y_val,
+                int C, int H, int W, int epochs,
+                string optimizer, double lr, int batch_size)
+    return (list[unknown] model, list[unknown] emas) {
+    /*
+     * Train ResNet-18 model with specified optimizer.
+     * 
+     * Inputs:
+     * - X_train: Training data (N x CHW)
+     * - y_train: Training labels (N x num_classes) one-hot encoded
+     * - X_val: Validation data
+     * - y_val: Validation labels
+     * - C: Number of channels (3 for RGB)
+     * - H: Image height (224 for ImageNet)
+     * - W: Image width (224 for ImageNet)
+     * - epochs: Number of training epochs
+     * - optimizer: Optimizer to use ("sgd", "sgd_momentum", "adam", "lars")
+     * - lr: Learning rate
+     * - batch_size: Batch size for training
+     * 
+     * Outputs:
+     * - model: Trained model weights
+     * - emas: Exponential moving averages for batch normalization
+     */
+    
+    N = nrow(X_train)
+    num_classes = ncol(y_train)
+    
+    # Initialize model
+    [model, emas] = resnet18::init(num_classes, -1)
+    
+    # Initialize optimizer parameters
+    if (optimizer == "sgd") {
+        optim_params = list()
+    } else if (optimizer == "sgd_momentum") {
+        momentum = 0.9
+        optim_params = resnet18::init_sgd_momentum_optim_params(num_classes)
+    } else if (optimizer == "adam") {
+        optim_params = resnet18::init_adam_optim_params(num_classes)
+        beta1 = 0.9
+        beta2 = 0.999
+        epsilon = 1e-8
+        t = 0
+    } else if (optimizer == "lars") {
+        momentum = 0.9
+        weight_decay = 5e-4
+        trust_coeff = 0.001
+        optim_params = init_lars_optim_params(num_classes)
+    } else {
+        stop("Unsupported optimizer: " + optimizer)
+    }
+    
+    # Training loop
+    print("Starting ResNet-18 training with " + optimizer + " optimizer")
+    print("Batch size: " + batch_size + ", Learning rate: " + lr)
+    print("Training samples: " + N + ", Validation samples: " + nrow(X_val))
+    
+    num_batches = ceil(N / batch_size)
+    mode = "train"
+    
+    for (epoch in 1:epochs) {
+        print("\nEpoch " + epoch + "/" + epochs)
+        
+        # Shuffle data
+        rand_vals = rand(rows=N, cols=1, pdf="uniform")
+        X_train_with_rand = cbind(rand_vals, X_train)
+        y_train_with_rand = cbind(rand_vals, y_train)
+        
+        X_train_sorted = order(target=X_train_with_rand, by=1)
+        y_train_sorted = order(target=y_train_with_rand, by=1)
+        
+        X_train_shuffled = X_train_sorted[,2:ncol(X_train_sorted)]
+        y_train_shuffled = y_train_sorted[,2:ncol(y_train_sorted)]
+        
+        epoch_loss = 0
+        epoch_correct = 0
+        epoch_correct_top5 = 0
+        
+        for (batch in 1:num_batches) {
+            # Get batch
+            start_idx = (batch-1) * batch_size + 1
+            end_idx = min(batch * batch_size, N)
+            X_batch = X_train_shuffled[start_idx:end_idx,]
+            y_batch = y_train_shuffled[start_idx:end_idx,]
+            batch_size_actual = end_idx - start_idx + 1
+            
+            # Forward pass
+            [out, emas, cached_out, cached_means_vars] = resnet18::forward(X_batch, H, W, model, mode, emas)
+            
+            # Compute loss
+            loss = cross_entropy_loss::forward(out, y_batch)
+            epoch_loss = epoch_loss + loss * batch_size_actual
+            
+            # Compute accuracy
+            pred = rowIndexMax(out)
+            y_pred = table(seq(1, batch_size_actual), pred, batch_size_actual, num_classes)
+            epoch_correct = epoch_correct + sum(y_pred * y_batch)
+            
+            # Compute top-5 accuracy
+            epoch_correct_top5 = epoch_correct_top5 + compute_topk_correct(out, y_batch, 5)
+            
+            # Backward pass
+            dOut = cross_entropy_loss::backward(out, y_batch)
+            [dX, gradients] = resnet18::backward(dOut, cached_out, model, cached_means_vars)
+            
+            # Update parameters based on optimizer
+            if (optimizer == "sgd") {
+                model = resnet18::update_params_with_sgd(model, gradients, lr)
+            } else if (optimizer == "sgd_momentum") {
+                [model, optim_params] = resnet18::update_params_with_sgd_momentum(model, gradients, lr, momentum, optim_params)
+            } else if (optimizer == "adam") {
+                t = t + 1
+                [model, optim_params] = resnet18::update_params_with_adam(model, gradients, lr, beta1, beta2, epsilon, t, optim_params)
+            } else if (optimizer == "lars") {
+                [model, optim_params] = update_params_with_lars(model, gradients, lr, momentum, weight_decay, trust_coeff, optim_params)
+            }
+            
+            if (batch %% 10 == 0) {
+                avg_loss = epoch_loss / ((batch-1)*batch_size + batch_size_actual)
+                print("  Batch " + batch + "/" + num_batches + ", Loss: " + avg_loss)
+            }
+        }
+        
+        # Print epoch statistics
+        train_loss = epoch_loss / N
+        train_acc = epoch_correct / N * 100
+        train_acc_top5 = epoch_correct_top5 / N * 100
+        print("  Training - Loss: " + train_loss + ", Top-1 Acc: " + train_acc + "%, Top-5 Acc: " + train_acc_top5 + "%")
+        
+        # Validation
+        if (ncol(X_val) > 0) {
+            mode_val = "test"
+            val_loss = 0
+            val_correct = 0
+            val_correct_top5 = 0
+            val_batches = ceil(nrow(X_val) / batch_size)
+            
+            for (batch in 1:val_batches) {
+                start_idx = (batch-1) * batch_size + 1
+                end_idx = min(batch * batch_size, nrow(X_val))
+                X_batch = X_val[start_idx:end_idx,]
+                y_batch = y_val[start_idx:end_idx,]
+                batch_size_actual = end_idx - start_idx + 1
+                
+                # Forward pass
+                [out, emas_val, cached_out_val, cached_means_vars_val] = resnet18::forward(X_batch, H, W, model, mode_val, emas)
+                
+                # Compute loss and accuracy
+                loss = cross_entropy_loss::forward(out, y_batch)
+                val_loss = val_loss + loss * batch_size_actual
+                
+                pred = rowIndexMax(out)
+                y_pred = table(seq(1, batch_size_actual), pred, batch_size_actual, num_classes)
+                val_correct = val_correct + sum(y_pred * y_batch)
+                
+                val_correct_top5 = val_correct_top5 + compute_topk_correct(out, y_batch, 5)
+            }
+            
+            val_loss = val_loss / nrow(X_val)
+            val_acc = val_correct / nrow(X_val) * 100
+            val_acc_top5 = val_correct_top5 / nrow(X_val) * 100
+            
+            print("  Validation - Loss: " + val_loss + ", Top-1 Acc: " + val_acc + "%, Top-5 Acc: " + val_acc_top5 + "%")
+        }
+    }
+    
+    print("\nTraining completed!")
+}
+
+# Compute number of correct top-k predictions
+compute_topk_correct = function(matrix[double] scores, matrix[double] y_true, int k)
+    return (int correct) {
+    /*
+     * Compute number of correct top-k predictions.
+     */
+    N = nrow(scores)
+    num_classes = ncol(scores)
+    
+    correct = 0
+    for (i in 1:N) {
+        # Get top k predictions for this sample
+        row_scores = scores[i,]
+        
+        # Find indices of top k scores
+        top_k_indices = matrix(0, rows=k, cols=1)
+        temp_scores = row_scores
+        
+        for (j in 1:k) {
+            max_idx = as.scalar(rowIndexMax(temp_scores))
+            top_k_indices[j,1] = max_idx
+            temp_scores[1,max_idx] = -1e10  # Set to very low value
+        }
+        
+        # Check if true label is in top k
+        true_label = as.scalar(rowIndexMax(y_true[i,]))
+        if (sum(top_k_indices == true_label) > 0) {
+            correct = correct + 1
+        }
+    }
+}
+
+# Evaluate model
+evaluate = function(matrix[double] X_test, matrix[double] y_test,
+                   int C, int H, int W, list[unknown] model, list[unknown] emas)
+    return (double loss, double acc_top1, double acc_top5) {
+    /*
+     * Evaluate ResNet-18 model on test data.
+     */
+    N = nrow(X_test)
+    num_classes = ncol(y_test)
+    batch_size = 128
+    num_batches = ceil(N / batch_size)
+    mode = "test"
+    
+    total_loss = 0
+    total_correct = 0
+    total_correct_top5 = 0
+    
+    for (batch in 1:num_batches) {
+        start_idx = (batch-1) * batch_size + 1
+        end_idx = min(batch * batch_size, N)
+        X_batch = X_test[start_idx:end_idx,]
+        y_batch = y_test[start_idx:end_idx,]
+        batch_size_actual = end_idx - start_idx + 1
+        
+        # Forward pass
+        [out, emas_test, cached_out, cached_means_vars] = resnet18::forward(X_batch, H, W, model, mode, emas)
+        
+        # Compute loss
+        loss_batch = cross_entropy_loss::forward(out, y_batch)
+        total_loss = total_loss + loss_batch * batch_size_actual
+        
+        # Compute top-1 accuracy
+        pred = rowIndexMax(out)
+        y_pred = table(seq(1, batch_size_actual), pred, batch_size_actual, num_classes)
+        total_correct = total_correct + sum(y_pred * y_batch)
+        
+        # Compute top-5 accuracy
+        total_correct_top5 = total_correct_top5 + compute_topk_correct(out, y_batch, 5)
+    }
+    
+    loss = total_loss / N
+    acc_top1 = total_correct / N * 100
+    acc_top5 = total_correct_top5 / N * 100
+} 

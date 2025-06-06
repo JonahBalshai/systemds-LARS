@@ -1,0 +1,172 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * Example: ResNet-18 on ImageNet with Multiple Optimizers
+ * 
+ * This example compares different optimizers for training ResNet-18
+ * on ImageNet: SGD, SGD with Momentum, Adam, and LARS.
+ * 
+ * We test with a moderate batch size to show optimizer characteristics.
+ */
+
+source("scripts/nn/examples/imagenet_resnet.dml") as resnet
+
+# Configuration
+print("ResNet-18 on ImageNet: Optimizer Comparison")
+print("===========================================")
+
+# Dataset parameters
+C = 3          # RGB channels
+H = 224        # Image height
+W = 224        # Image width
+num_classes = 1000  # ImageNet classes
+
+# Training parameters
+epochs = 10    # Reduced for demo (normally 90)
+batch_size = 512  # Moderate batch size
+
+# Create synthetic ImageNet data for demo
+# In practice, load real ImageNet data
+print("\nGenerating synthetic ImageNet data for demonstration...")
+N_train = 10000  # Reduced for demo (normally ~1.2M)
+N_val = 1000     # Reduced for demo (normally 50K)
+
+X_train = rand(rows=N_train, cols=C*H*W, pdf="normal", seed=42) * 0.1
+y_train = table(seq(1, N_train), sample(num_classes, N_train, TRUE), N_train, num_classes)
+
+X_val = rand(rows=N_val, cols=C*H*W, pdf="normal", seed=43) * 0.1
+y_val = table(seq(1, N_val), sample(num_classes, N_val, TRUE), N_val, num_classes)
+
+print("Training data shape: " + nrow(X_train) + " x " + ncol(X_train))
+print("Validation data shape: " + nrow(X_val) + " x " + ncol(X_val))
+print("Batch size: " + batch_size)
+print("Epochs: " + epochs)
+
+# Optimizer configurations
+optimizers = list("sgd", "sgd_momentum", "adam", "lars")
+learning_rates = list(0.1, 0.1, 0.001, 0.2)  # Tuned for each optimizer
+
+# Results storage
+results = matrix(0, rows=length(optimizers), cols=5)
+# Columns: optimizer_id, final_loss, top1_acc, top5_acc, training_time
+
+# Test each optimizer
+for (i in 1:length(optimizers)) {
+    optimizer = as.scalar(optimizers[i])
+    lr = as.scalar(learning_rates[i])
+    
+    print("\n\n========================================")
+    print("Testing optimizer: " + optimizer)
+    print("Learning rate: " + lr)
+    print("========================================")
+    
+    start_time = time()
+    
+    # Train model
+    [model, emas] = resnet::train(X_train, y_train, X_val, y_val,
+                                 C, H, W, epochs, optimizer, lr, batch_size)
+    
+    training_time = (time() - start_time) / 1000.0  # Convert to seconds
+    
+    # Evaluate model
+    [loss, acc_top1, acc_top5] = resnet::evaluate(X_val, y_val, C, H, W, model, emas)
+    
+    print("\nFinal Results for " + optimizer + ":")
+    print("  Validation Loss: " + loss)
+    print("  Top-1 Accuracy: " + acc_top1 + "%")
+    print("  Top-5 Accuracy: " + acc_top5 + "%")
+    print("  Training Time: " + training_time + " seconds")
+    
+    # Store results
+    results[i, 1] = i
+    results[i, 2] = loss
+    results[i, 3] = acc_top1
+    results[i, 4] = acc_top5
+    results[i, 5] = training_time
+}
+
+# Summary
+print("\n\n========================================")
+print("SUMMARY: Optimizer Comparison")
+print("========================================")
+print("\nOptimizer Performance (sorted by Top-1 accuracy):")
+
+# Sort by top-1 accuracy
+sorted_indices = order(target=results[,3], by=1, decreasing=TRUE)
+
+print("\nRank | Optimizer     | Loss   | Top-1  | Top-5  | Time(s)")
+print("-----|---------------|--------|--------|--------|--------")
+
+for (i in 1:nrow(results)) {
+    idx = as.scalar(sorted_indices[i,1])
+    opt_name = as.scalar(optimizers[idx])
+    
+    # Format optimizer name to fixed width
+    if (opt_name == "sgd") {
+        opt_display = "SGD           "
+    } else if (opt_name == "sgd_momentum") {
+        opt_display = "SGD+Momentum  "
+    } else if (opt_name == "adam") {
+        opt_display = "Adam          "
+    } else if (opt_name == "lars") {
+        opt_display = "LARS          "
+    }
+    
+    print(i + "    | " + opt_display + " | " + 
+          round(as.scalar(results[idx,2]), 3) + " | " +
+          round(as.scalar(results[idx,3]), 1) + "% | " +
+          round(as.scalar(results[idx,4]), 1) + "% | " +
+          round(as.scalar(results[idx,5]), 1))
+}
+
+# Analysis
+print("\n\nKey Observations:")
+print("1. Optimizer Characteristics:")
+print("   - SGD: Simple but may converge slowly")
+print("   - SGD+Momentum: Faster convergence than vanilla SGD")
+print("   - Adam: Adaptive learning rates, good for many problems")
+print("   - LARS: Designed for large batch training, layer-wise adaptation")
+
+print("\n2. For Large Batch Training:")
+print("   - LARS typically performs best with large batches (>1K)")
+print("   - Adam works well for moderate batch sizes")
+print("   - SGD+Momentum is reliable but may need careful tuning")
+
+print("\n3. Hyperparameter Sensitivity:")
+print("   - SGD/SGD+Momentum: Very sensitive to learning rate")
+print("   - Adam: More robust to learning rate choice")
+print("   - LARS: Designed to be robust across batch sizes")
+
+# Save detailed results
+write(results, "imagenet_resnet_optimizer_comparison.csv", format="csv")
+print("\nDetailed results saved to imagenet_resnet_optimizer_comparison.csv")
+
+# Create visualization data
+viz_data = matrix(0, rows=length(optimizers), cols=3)
+for (i in 1:length(optimizers)) {
+    viz_data[i,1] = i
+    viz_data[i,2] = results[i,3]  # Top-1 accuracy
+    viz_data[i,3] = results[i,4]  # Top-5 accuracy
+}
+
+write(viz_data, "imagenet_resnet_accuracy_comparison.csv", format="csv")
+print("Visualization data saved to imagenet_resnet_accuracy_comparison.csv") 

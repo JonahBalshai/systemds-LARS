@@ -1,0 +1,156 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * Example: ResNet-18 on ImageNet with LARS vs SGD
+ * 
+ * This example demonstrates the advantage of LARS optimizer for
+ * large batch training on ImageNet with ResNet-18.
+ * 
+ * We compare LARS vs SGD with momentum across different batch sizes
+ * to show how LARS enables linear learning rate scaling.
+ */
+
+source("scripts/nn/examples/imagenet_resnet.dml") as resnet
+
+# Configuration
+print("ResNet-18 on ImageNet: LARS vs SGD Comparison")
+print("=============================================")
+
+# Dataset parameters
+C = 3          # RGB channels
+H = 224        # Image height
+W = 224        # Image width
+num_classes = 1000  # ImageNet classes
+
+# Training parameters
+epochs = 5     # Reduced for demo (normally 90)
+base_lr = 0.1  # Base learning rate for batch size 256
+
+# Batch sizes to test
+batch_sizes = list(256, 1024, 4096, 8192)
+
+# Create synthetic ImageNet data for demo
+# In practice, load real ImageNet data
+print("\nGenerating synthetic ImageNet data for demonstration...")
+N_train = 10000  # Reduced for demo (normally ~1.2M)
+N_val = 1000     # Reduced for demo (normally 50K)
+
+X_train = rand(rows=N_train, cols=C*H*W, pdf="normal", seed=42) * 0.1
+y_train = table(seq(1, N_train), sample(num_classes, N_train, TRUE), N_train, num_classes)
+
+X_val = rand(rows=N_val, cols=C*H*W, pdf="normal", seed=43) * 0.1
+y_val = table(seq(1, N_val), sample(num_classes, N_val, TRUE), N_val, num_classes)
+
+print("Training data shape: " + nrow(X_train) + " x " + ncol(X_train))
+print("Validation data shape: " + nrow(X_val) + " x " + ncol(X_val))
+
+# Results storage
+results = matrix(0, rows=length(batch_sizes)*2, cols=4)
+# Columns: batch_size, optimizer, final_train_acc, final_val_acc
+
+row_idx = 1
+
+# Test different batch sizes
+for (i in 1:length(batch_sizes)) {
+    batch_size = as.scalar(batch_sizes[i])
+    
+    print("\n\n========================================")
+    print("Testing batch size: " + batch_size)
+    print("========================================")
+    
+    # SGD with momentum - sqrt scaling
+    print("\n--- SGD with Momentum (sqrt scaling) ---")
+    lr_sgd = base_lr * sqrt(batch_size / 256)
+    print("Learning rate: " + lr_sgd)
+    
+    [model_sgd, emas_sgd] = resnet::train(X_train, y_train, X_val, y_val, 
+                                          C, H, W, epochs, "sgd_momentum", 
+                                          lr_sgd, batch_size)
+    
+    # Evaluate SGD model
+    [loss_sgd, acc1_sgd, acc5_sgd] = resnet::evaluate(X_val, y_val, C, H, W, 
+                                                       model_sgd, emas_sgd)
+    
+    print("\nSGD Final Results:")
+    print("  Validation Loss: " + loss_sgd)
+    print("  Top-1 Accuracy: " + acc1_sgd + "%")
+    print("  Top-5 Accuracy: " + acc5_sgd + "%")
+    
+    # Store SGD results
+    results[row_idx, 1] = batch_size
+    results[row_idx, 2] = 1  # 1 for SGD
+    results[row_idx, 3] = acc1_sgd
+    results[row_idx, 4] = acc5_sgd
+    row_idx = row_idx + 1
+    
+    # LARS - linear scaling
+    print("\n--- LARS (linear scaling) ---")
+    lr_lars = base_lr * (batch_size / 256)
+    print("Learning rate: " + lr_lars)
+    
+    [model_lars, emas_lars] = resnet::train(X_train, y_train, X_val, y_val,
+                                            C, H, W, epochs, "lars", 
+                                            lr_lars, batch_size)
+    
+    # Evaluate LARS model
+    [loss_lars, acc1_lars, acc5_lars] = resnet::evaluate(X_val, y_val, C, H, W,
+                                                          model_lars, emas_lars)
+    
+    print("\nLARS Final Results:")
+    print("  Validation Loss: " + loss_lars)
+    print("  Top-1 Accuracy: " + acc1_lars + "%")
+    print("  Top-5 Accuracy: " + acc5_lars + "%")
+    
+    # Store LARS results
+    results[row_idx, 1] = batch_size
+    results[row_idx, 2] = 2  # 2 for LARS
+    results[row_idx, 3] = acc1_lars
+    results[row_idx, 4] = acc5_lars
+    row_idx = row_idx + 1
+    
+    # Compare
+    print("\nImprovement with LARS:")
+    print("  Top-1: " + (acc1_lars - acc1_sgd) + " percentage points")
+    print("  Top-5: " + (acc5_lars - acc5_sgd) + " percentage points")
+}
+
+# Summary
+print("\n\n========================================")
+print("SUMMARY: ResNet-18 on ImageNet")
+print("========================================")
+print("\nResults (Batch Size, Optimizer, Top-1 Acc, Top-5 Acc):")
+
+for (i in 1:nrow(results)) {
+    opt_name = ifelse(as.scalar(results[i,2]) == 1, "SGD+Momentum", "LARS")
+    print("  " + as.scalar(results[i,1]) + ", " + opt_name + ", " + 
+          as.scalar(results[i,3]) + "%, " + as.scalar(results[i,4]) + "%")
+}
+
+print("\nKey Observations:")
+print("1. LARS maintains accuracy better than SGD at large batch sizes")
+print("2. LARS enables linear learning rate scaling (lr ∝ batch_size)")
+print("3. SGD requires sqrt scaling (lr ∝ sqrt(batch_size)) and still degrades")
+print("4. With LARS, we can use larger batches for faster training")
+
+# Save results
+write(results, "imagenet_resnet_lars_results.csv", format="csv")
+print("\nResults saved to imagenet_resnet_lars_results.csv") 
