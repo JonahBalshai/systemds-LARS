@@ -147,7 +147,7 @@ train_resnet50_lars = function(int batch_size=4096, int epochs=-1, double base_l
     
     for (iter in 1:iters_per_epoch) {
       # Get learning rate with warmup and decay
-      lr = resnet50::get_lr_with_warmup(base_lr, epoch, iter, epochs, 
+      lr = lars::get_lr_with_warmup(base_lr, epoch, iter, epochs, 
                                        iters_per_epoch, batch_size, 
                                        base_batch_size, warmup_epochs, decay_power)
       
