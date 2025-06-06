@@ -58,11 +58,11 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double mu,
   X_norm = sqrt(sum(X^2))
   dX_norm = sqrt(sum(dX_wd^2))
   
-  # Compute local learning rate
-  # LARS local lr = trust_coeff * ||X|| / ||dX||
-  # We add a small epsilon to avoid division by zero
+  # Compute local learning rate according to LARS paper
+  # λ_l = η × ||w|| / (||∇L(w)|| + β||w||)
+  # where η is trust_coeff, β is lambda (weight decay)
   epsilon = 1e-8
-  local_lr = trust_coeff * X_norm / (dX_norm + epsilon)
+  local_lr = trust_coeff * X_norm / (dX_norm + lambda * X_norm + epsilon)
   
   # Apply global learning rate scaling
   # Note: In the paper, they use lr * local_lr, but also mention

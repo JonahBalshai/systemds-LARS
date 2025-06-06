@@ -1,0 +1,547 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * ResNet50 with LARS (Layer-wise Adaptive Rate Scaling) optimizer support
+ * 
+ * Based on the original ResNet50 implementation with added LARS functionality
+ * for large batch training as described in:
+ * "Large Batch Training of Convolutional Networks" by You et al.
+ */
+
+source("scripts/nn/networks/resnet.dml") as resnet
+source("scripts/nn/networks/resnet_util.dml") as util
+source("nn/optim/lars.dml") as lars
+source("nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
+source("nn/layers/l2_reg.dml") as l2_reg
+
+forward = function(matrix[double] X, int Hin, int Win,
+                            list[unknown] model, string mode,
+                            list[unknown] ema_means_vars)
+    return (matrix[double] out, list[unknown] ema_means_vars_upd,
+            list[unknown] cached_out, list[unknown] cached_means_vars) {
+    /*
+     * Forward pass of the ResNet50 as introduced in
+     * "Deep Residual Learning for Image Recognition" by
+     * Kaiming He et. al., refined in "ResNet v1.5 for
+     * PyTorch" by NVIDIA and inspired by the PyTorch
+     * implementation.
+     *
+     * Inputs:
+     * - X: Inputs, of shape (N, C_in*Hin*Win).
+     *     C_in = 3 is expected.
+     * - Hin: Input height.
+     * - Win: Input width.
+     * - model: Weights and bias matrices of the model
+     *     with the following order/content:
+     *   -> 1: Weights of conv 1 7x7, of shape (64, 3*7*7)
+     *   -> 2: Weights of batch norm 1, of shape (64, 1).
+     *   -> 3: Bias of batch norm 1, of shape (64, 1).
+     *   -> 4: List of weights for first residual layer
+     *         with 64 base channels.
+     *   -> 5: List of weights for second residual layer
+     *         with 128 base channels.
+     *   -> 6: List of weights for third residual layer
+     *         with 256 base channels.
+     *   -> 7: List of weights for fourth residual layer
+     *         with 512 base channels.
+     *      List of residual layers 1, 2, 3 & 4 have
+     *      the content/order:
+     *      -> i: List of weights for residual block i.
+     *            with i in {1, ..., layer_sizes[layer]}
+     *         Each list of weights for a residual block
+     *         must follow the same order as defined in
+     *         the documentation of bottleneck_block_forward().
+     *   -> 8: Weights of fully connected layer, of shape (C_out, classes)
+     *         where C_out = 512 for basic block type and C_out = 2048
+     *         for bottleneck block type.
+     *   -> 9: Bias of fully connected layer, of shape (1, classes)
+     * - mode: 'train' or 'test' to indicate if the model is currently
+     *     being trained or tested for badge normalization layers.
+     *     See badge_norm2d.dml docs for more info.
+     * - ema_means_vars: List of exponential moving averages for mean
+     *     and variance for badge normalization layers.
+     *   -> 1: EMA for mean of badge norm 1, of shape (64, 1).
+     *   -> 2: EMA for variance of badge norm 1, of shape (64, 1).
+     *   -> 3: List of EMA means and vars for residual layer 1.
+     *   -> 4: List of EMA means and vars for residual layer 2.
+     *   -> 5: List of EMA means and vars for residual layer 3.
+     *   -> 6: List of EMA means and vars for residual layer 4.
+     *      Lists for EMAs of layer 1, 2, 3 & 4 must have the
+     *      following order:
+     *      -> i: List of EMA means and vars for residual block i.
+     *            with i in {1, ..., layer_sizes[layer]}
+     *         Each list of EMAs for a residual block
+     *         must follow the same order as defined in
+     *         the documentation bottleneck_block_forward().
+     * - NOTICE: The lists of the first blocks for layer 2, 3 and 4
+     *           must include weights and EMAs for 1 extra conv layer
+     *           and a batch norm layer for the downsampling on the
+     *           identity path.
+     *
+     * Outputs:
+     * - out: Outputs, of shape (N, classes)
+     * - ema_means_vars_upd: List of updated exponential moving averages
+     *     for mean and variance of badge normalization layers. It follows
+     *     the same exact structure as the input EMAs list.
+     * - cached_out: Outputs of each layer for computation of backward
+     *     pass. Refer to the code for the order of elements.
+     * - cached_means_vars: List of cached means and vars returned from
+     *     each batch normalization layer. This is required for the
+     *     backward pass of the network.
+     */
+    layer_sizes = list(3, 4, 6, 3)
+    block_type = "bottleneck"
+    [out, ema_means_vars_upd, cached_out, cached_means_vars] = resnet::resnet_forward(X, Hin, Win, block_type,
+        layer_sizes, model, mode, ema_means_vars)
+}
+
+backward = function(matrix[double] dOut, list[unknown] cached_out,
+                    list[unknown] model, list[unknown] cached_means_vars)
+    return (matrix[double] dX, list[unknown] gradients) {
+    /*
+     * Backward pass of the ResNet 50 model as introduced in
+     * "Deep Residual Learning for Image Recognition" by
+     * Kaiming He et. al. and inspired by PyTorch.
+     *
+     * Inputs:
+     * - dOut: Partial derivative of the loss w.r.t. the
+     *     outputs, of shape (N, classes).
+     * - cashed_out: List of cashed outputs from the forward
+     *     pass for each layer output with dimensions.
+     * -> NOTICE: Use the exact list returned by the forward
+     *            pass without modification.
+     * - model: Weights and bias matrices of the model
+     *     with the same order as for the forward pass.
+     * -> NOTICE: The lists of the first blocks for layer 2, 3 and 4
+     *            must include weights and EMAs for 1 extra conv layer
+     *            and a batch norm layer for the downsampling on the
+     *            identity path.
+     * - cached_means_vars: List of cached means and vars returned
+     *     by the forward pass. It has the same structure as the
+     *     ema_means_vars for the forward pass.
+     * -> NOTICE: Use the exact list returned by the forward
+     *            pass without modification.
+     *
+     * Outputs:
+     * - dX: Derivative of the loss w.r.t. the inputs, of
+     *     shape (N, C_in*Hin*Win).
+     * - gradients: Gradients of each learnable parameters of
+     *     every layer in the network with the same structure
+     *     as the input weights.
+     * -> NOTICE: To update the parameters of the model, use
+     *            one of the provided utility functions.
+     */
+    layer_sizes = list(3, 4, 6, 3)
+    block_type = "bottleneck"
+    [dX, gradients] = resnet::resnet_backward(dOut, cached_out, block_type, layer_sizes, model, cached_means_vars)
+}
+
+/*
+ * Model initialization.
+ */
+
+init = function(int classes, int seed)
+    return(list[unknown] model, list[unknown] emas) {
+    /*
+     * Initializes all parameters of the model according to the
+     * respective initializer functions of each layer.
+     * NOTICE: It is recommended to use this function for
+     *         initialization to directly have the correct
+     *         model list structure.
+     *
+     * Inputs:
+     * - classes: Number of network output classes.
+     * - seed: Seed for randomizer function.
+     *
+     * Outputs:
+     * - model: List of weights and biases with the structure
+     *     described in the forward pass documentation.
+     * - emas: List of exponential moving averages of the mean
+     *     and variance for each batch normalization layer.
+     *     The structure is described in the forward pass
+     *     documentation.
+     */
+    layer_sizes = list(3, 4, 6, 3)
+    [model, emas] = resnet::init(classes, "bottleneck", layer_sizes, seed)
+}
+
+/*
+ * LARS (Layer-wise Adaptive Rate Scaling) optimizer support.
+ */
+
+init_lars_optim_params = function(int classes)
+    return(list[unknown] params) {
+    /*
+     * Initializes the state of the LARS optimizer for every
+     * learnable parameter of ResNet 50.
+     *
+     * Inputs:
+     * - classes: Number of network output classes.
+     *
+     * Outputs:
+     * - params: List of state parameters with the same structure
+     *     as weights of the forward and backward pass. It can be
+     *     directly passed to the update parameter function.
+     */
+    layer_sizes = list(3, 4, 6, 3)
+    params = util::init_optim("sgd_momentum", classes, "bottleneck", layer_sizes)
+}
+
+update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
+                                   double lr, double mu, double weight_decay,
+                                   double trust_coeff, list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    /*
+     * Updates all learnable parameters with the LARS optimizer.
+     *
+     * LARS (Layer-wise Adaptive Rate Scaling) applies different learning
+     * rates to different layers based on the ratio of parameter norm
+     * to gradient norm, enabling stable large-batch training.
+     *
+     * Inputs:
+     * - model: Model parameters, same as for forward and backward pass.
+     * - gradients: Gradients, returned from the backward pass.
+     * - lr: Global learning rate.
+     * - mu: Momentum value. Recommended: 0.9
+     * - weight_decay: L2 regularization strength. Recommended: 5e-4
+     * - trust_coeff: Trust coefficient for LARS. Recommended: 0.001
+     * - optim_state: Optimizer states for all model parameters.
+     *
+     * Outputs:
+     * - model_upd: Updated model parameters.
+     * - optim_state_upd: Updated model states for all parameters.
+     */
+    model_upd = list()
+    optim_state_upd = list()
+    
+    # Flatten nested model structure for LARS updates
+    flat_model = flatten_model_params(model)
+    flat_grads = flatten_model_params(gradients)
+    flat_optim = flatten_model_params(optim_state)
+    
+    # Apply LARS update to each parameter
+    flat_model_upd = list()
+    flat_optim_upd = list()
+    for (i in 1:length(flat_model)) {
+        param = as.matrix(flat_model[i])
+        grad = as.matrix(flat_grads[i])
+        momentum_state = as.matrix(flat_optim[i])
+        
+        [param_upd, momentum_state_upd] = lars::update(param, grad, lr, mu, 
+                                                      momentum_state, weight_decay, trust_coeff)
+        flat_model_upd = append(flat_model_upd, param_upd)
+        flat_optim_upd = append(flat_optim_upd, momentum_state_upd)
+    }
+    
+    # Reconstruct model structure
+    model_upd = reconstruct_model_params(flat_model_upd, model)
+    optim_state_upd = reconstruct_model_params(flat_optim_upd, optim_state)
+}
+
+flatten_model_params = function(list[unknown] nested_params)
+    return (list[unknown] flat_params) {
+    /*
+     * Flattens the nested ResNet50 parameter structure into a flat list.
+     */
+    flat_params = list()
+    
+    # First 3 parameters (conv1 + bn1)
+    for (i in 1:3) {
+        flat_params = append(flat_params, nested_params[i])
+    }
+    
+    # Residual layers 4-7 (nested structure)
+    for (layer in 4:7) {
+        layer_params = as.list(nested_params[layer])
+        for (block in 1:length(layer_params)) {
+            block_params = as.list(layer_params[block])
+            for (param in 1:length(block_params)) {
+                flat_params = append(flat_params, block_params[param])
+            }
+        }
+    }
+    
+    # Final FC layer (weights + bias)
+    flat_params = append(flat_params, nested_params[8])
+    flat_params = append(flat_params, nested_params[9])
+}
+
+reconstruct_model_params = function(list[unknown] flat_params, list[unknown] structure_template)
+    return (list[unknown] nested_params) {
+    /*
+     * Reconstructs the nested ResNet50 parameter structure from flat list.
+     */
+    nested_params = list()
+    flat_idx = 1
+    
+    # First 3 parameters (conv1 + bn1)
+    for (i in 1:3) {
+        nested_params = append(nested_params, flat_params[flat_idx])
+        flat_idx = flat_idx + 1
+    }
+    
+    # Residual layers 4-7 (nested structure)
+    for (layer in 4:7) {
+        layer_template = as.list(structure_template[layer])
+        layer_params = list()
+        
+        for (block in 1:length(layer_template)) {
+            block_template = as.list(layer_template[block])
+            block_params = list()
+            
+            for (param in 1:length(block_template)) {
+                block_params = append(block_params, flat_params[flat_idx])
+                flat_idx = flat_idx + 1
+            }
+            layer_params = append(layer_params, block_params)
+        }
+        nested_params = append(nested_params, layer_params)
+    }
+    
+    # Final FC layer (weights + bias)
+    nested_params = append(nested_params, flat_params[flat_idx])
+    nested_params = append(nested_params, flat_params[flat_idx + 1])
+}
+
+/*
+ * LARS hyperparameter management and learning rate scheduling.
+ */
+
+get_lars_hyperparams = function(int batch_size, boolean use_bn)
+    return (double base_lr, int warmup_epochs, int total_epochs) {
+    /*
+     * Get recommended LARS hyperparameters based on batch size.
+     * Based on "Large Batch Training of Convolutional Networks" paper.
+     */
+    base_lr = 0.1  # Base learning rate for ResNet50
+    warmup_epochs = 5
+    total_epochs = 90  # Standard ImageNet training
+    
+    # Adjust for large batch sizes
+    if (batch_size >= 8192) {
+        warmup_epochs = 10
+        total_epochs = 120
+    }
+    else if (batch_size >= 4096) {
+        warmup_epochs = 8
+        total_epochs = 100
+    }
+}
+
+get_lr_with_warmup = function(double base_lr, int epoch, int iter, int total_epochs,
+                              int iters_per_epoch, int batch_size, int base_batch_size,
+                              int warmup_epochs, int decay_power)
+    return (double lr) {
+    /*
+     * Compute learning rate with linear warmup and polynomial decay.
+     * 
+     * Implements the learning rate schedule from LARS paper:
+     * - Linear warmup for first warmup_epochs
+     * - Polynomial decay afterwards
+     * - Linear scaling with batch size
+     */
+    
+    # Scale learning rate linearly with batch size
+    scaled_lr = base_lr * batch_size / base_batch_size
+    
+    # Total number of iterations
+    total_iters = total_epochs * iters_per_epoch
+    warmup_iters = warmup_epochs * iters_per_epoch
+    current_iter = (epoch - 1) * iters_per_epoch + iter
+    
+    if (current_iter <= warmup_iters) {
+        # Linear warmup
+        lr = scaled_lr * current_iter / warmup_iters
+    } else {
+        # Polynomial decay
+        decay_iters = total_iters - warmup_iters
+        decay_current = current_iter - warmup_iters
+        decay_factor = (1 - decay_current / decay_iters) ^ decay_power
+        lr = scaled_lr * decay_factor
+    }
+}
+
+compute_loss = function(matrix[double] predictions, matrix[double] targets, 
+                       list[unknown] model, double weight_decay)
+    return (double loss) {
+    /*
+     * Compute cross-entropy loss with L2 regularization for ResNet50.
+     */
+    data_loss = cross_entropy_loss::forward(predictions, targets)
+    
+    # Add L2 regularization for all weight parameters
+    reg_loss = 0
+    flat_model = flatten_model_params(model)
+    
+    # Apply regularization to weight matrices only (skip biases and BN params)
+    # ResNet50 weight indices: conv weights, FC weights
+    for (i in 1:length(flat_model)) {
+        param = as.matrix(flat_model[i])
+        # Only regularize if it looks like a weight matrix (2D with reasonable size)
+        if (ncol(param) > 1 & nrow(param) > 1) {
+            reg_loss = reg_loss + l2_reg::forward(param, 1)
+        }
+    }
+    
+    loss = data_loss + weight_decay * reg_loss
+}
+
+compute_accuracy = function(matrix[double] predictions, matrix[double] targets)
+    return (double accuracy) {
+    /*
+     * Compute classification accuracy.
+     */
+    # Get predicted class (argmax)
+    pred_labels = rowIndexMax(predictions)
+    true_labels = rowIndexMax(targets)
+    accuracy = mean(pred_labels == true_labels)
+}
+
+evaluate = function(matrix[double] X, matrix[double] Y, int Hin, int Win,
+                   list[unknown] model, list[unknown] emas, int batch_size)
+    return (double loss, double accuracy) {
+    /*
+     * Evaluate ResNet50 model on a dataset.
+     */
+    N = nrow(X)
+    total_loss = 0
+    total_acc = 0
+    num_batches = ceil(N / batch_size)
+    
+    for (i in 1:num_batches) {
+        beg = ((i-1) * batch_size) %% N + 1
+        end = min(N, beg + batch_size - 1)
+        X_batch = X[beg:end,]
+        Y_batch = Y[beg:end,]
+        
+        # Forward pass in test mode
+        [predictions, emas_upd, cached_out, cached_means_vars] = forward(
+            X_batch, Hin, Win, model, "test", emas)
+        
+        batch_loss = compute_loss(predictions, Y_batch, model, 0.0)
+        batch_acc = compute_accuracy(predictions, Y_batch)
+        
+        total_loss = total_loss + batch_loss
+        total_acc = total_acc + batch_acc
+    }
+    
+    loss = total_loss / num_batches
+    accuracy = total_acc / num_batches
+}
+
+/*
+ * Legacy optimizer functions (keeping for compatibility)
+ */
+
+init_adagrad_optim_params = function(int classes)
+    return(list[unknown] params) {
+    layer_sizes = list(3, 4, 6, 3)
+    params = util::init_optim("adagrad", classes, "bottleneck", layer_sizes)
+}
+
+update_params_with_adagrad = function(list[unknown] model, list[unknown] gradients,
+                                      double lr, double epsilon,
+                                      list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    layer_sizes = list(3, 4, 6, 3)
+    hyper_params = list(lr, epsilon)
+    [optim_state_upd, model_upd] = util::update_params("adagrad", optim_state, hyper_params, gradients, model,
+        "bottleneck", layer_sizes)
+}
+
+init_adam_optim_params = function(int classes)
+    return(list[unknown] params) {
+    layer_sizes = list(3, 4, 6, 3)
+    params = util::init_optim("adam", classes, "bottleneck", layer_sizes)
+}
+
+update_params_with_adam = function(list[unknown] model, list[unknown] gradients,
+                                   double lr, double beta1, double beta2,
+                                   double epsilon, int t,
+                                   list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    layer_sizes = list(3, 4, 6, 3)
+    hyper_params = list(lr, beta1, beta2, epsilon, t)
+    [optim_state_upd, model_upd] = util::update_params("adam", optim_state, hyper_params, gradients, model,
+        "bottleneck", layer_sizes)
+}
+
+init_rmsprop_optim_params = function(int classes)
+    return(list[unknown] params) {
+    layer_sizes = list(3, 4, 6, 3)
+    params = util::init_optim("rmsprop", classes, "bottleneck", layer_sizes)
+}
+
+update_params_with_rmsprop = function(list[unknown] model, list[unknown] gradients,
+                                      double lr, double decay_rate,
+                                      double epsilon, list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    layer_sizes = list(3, 4, 6, 3)
+    hyper_params = list(lr, decay_rate, epsilon)
+    [optim_state_upd, model_upd] = util::update_params("rmsprop", optim_state, hyper_params, gradients, model,
+        "bottleneck", layer_sizes)
+}
+
+update_params_with_sgd = function(list[unknown] model,
+                                 list[unknown] gradients,
+                                 double lr)
+    return (list[unknown] model_upd) {
+    layer_sizes = list(3, 4, 6, 3)
+    hyper_params = list(lr)
+    optim_state = list()
+    [optim_state_upd, model_upd] = util::update_params("sgd", optim_state, hyper_params, gradients, model, "bottleneck",
+        layer_sizes)
+}
+
+init_sgd_momentum_optim_params = function(int classes)
+    return(list[unknown] params) {
+    layer_sizes = list(3, 4, 6, 3)
+    params = util::init_optim("sgd_momentum", classes, "bottleneck", layer_sizes)
+}
+
+update_params_with_sgd_momentum = function(list[unknown] model,
+                                           list[unknown] gradients,
+                                           double lr, double mu,
+                                           list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    layer_sizes = list(3, 4, 6, 3)
+    hyper_params = list(lr, mu)
+    [optim_state_upd, model_upd] = util::update_params("sgd_momentum", optim_state, hyper_params, gradients, model,
+        "bottleneck", layer_sizes)
+}
+
+init_sgd_nesterov_optim_params = function(int classes)
+    return(list[unknown] params) {
+    layer_sizes = list(3, 4, 6, 3)
+    params = util::init_optim("nesterov", classes, "bottleneck", layer_sizes)
+}
+
+update_params_with_sgd_nesterov = function(list[unknown] model,
+                                           list[unknown] gradients,
+                                           double lr, double mu,
+                                           list[unknown] optim_state)
+    return (list[unknown] model_upd, list[unknown] optim_state_upd) {
+    layer_sizes = list(3, 4, 6, 3)
+    hyper_params = list(lr, mu)
+    [optim_state_upd, model_upd] = util::update_params("sgd_nesterov", optim_state, hyper_params, gradients, model,
+        "bottleneck", layer_sizes)
+}
