@@ -149,7 +149,44 @@ train = function(matrix[double] X, matrix[double] Y, list[unknown] model, list[u
             # [model, optim_params] = resnet18::update_params_with_sgd_nesterov(model, gradients, lr, momentum,
             #     optim_params)
             # *** lars
-            [model, optim_params] = resnet18::update_params_with_lars(model, gradients, lr, momentum,
+            model_length = length(model)
+            grad_length = length(gradients)
+            v_length = length(optim_params)
+
+            # First check if lists have same length
+            if (model_length != grad_length) {
+                stop("Model and gradients lists have different lengths: " + model_length + " vs " + grad_length)
+            } else if (model_length != v_length) {
+                stop("waaaaaah")
+            }
+
+            # Check each layer with exception handling approach
+            for (i in 1:model_length) {
+                # Access list elements with explicit indexing
+                print(i)
+                param = model[i]
+                grad = gradients[i]
+                v = optim_params[i]
+
+                # Try to get dimensions - this will fail gracefully if not matrices
+                # Use matrix dimensions as the test for whether these are valid matrices
+                param_rows = nrow(param)
+                param_cols = ncol(param)
+                grad_rows = nrow(grad)  
+                grad_cols = ncol(grad)
+                v_rows = nrow(v)
+                v_cols = ncol(v)
+
+                # If we got here, both are matrices, so check dimensions
+                if (param_rows != grad_rows | param_cols != grad_cols) {
+                    print("test")
+                    stop("Layer " + i + " dimension mismatch: param=" + param_rows + "x" + param_cols + 
+                        " vs grad=" + grad_rows + "x" + grad_cols)
+                } else if (param_rows != v_rows | param_cols != v_cols) {
+                    stop("waaaaaah")
+                }
+            }
+            [model, optim_params] = resnet18::update_params_with_lars(model, gradients, lr, momentum, weight_decay, trust_coeff,
                   optim_params)
         }
 
