@@ -50,22 +50,6 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double mu,
    *  - X: Updated parameters X, of same shape as input X.
    *  - v: Updated velocity, of same shape as input v.
    */
-  # CRITICAL FIX 1: Add dimension validation
-  if (nrow(X) != nrow(dX) | ncol(X) != ncol(dX)) {
-    print("ERROR: Parameter and gradient dimension mismatch!")
-    print("X dimensions: " + nrow(X) + " x " + ncol(X))
-    print("dX dimensions: " + nrow(dX) + " x " + ncol(dX))
-    stop("LARS update failed: X and dX must have identical dimensions")
-  }
-  
-  # CRITICAL FIX 2: Handle momentum buffer dimension mismatch
-  if (nrow(v) != nrow(X) | ncol(v) != ncol(X)) {
-    print("WARNING: Momentum buffer dimension mismatch detected!")
-    print("v dimensions: " + nrow(v) + " x " + ncol(v))
-    print("X dimensions: " + nrow(X) + " x " + ncol(X))
-    print("Reinitializing momentum buffer to match parameter dimensions")
-    v = matrix(0, rows=nrow(X), cols=ncol(X))
-  }
   # Add weight decay to gradient
   dX_wd = dX + lambda * X
   
