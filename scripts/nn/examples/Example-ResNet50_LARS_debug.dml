@@ -20,41 +20,38 @@
 #-------------------------------------------------------------
 
 /*
- * CORRECTED: AlexNet-BN ImageNet Training with LARS
+ * ResNet50 ImageNet Training with LARS
  * 
- * This example demonstrates large-batch training of AlexNet with 
- * Batch Normalization using the LARS (Layer-wise Adaptive Rate Scaling) 
- * optimizer, as described in:
+ * This example demonstrates large-batch training of ResNet50 using 
+ * the LARS (Layer-wise Adaptive Rate Scaling) optimizer, as described in:
  * 
  * "Large Batch Training of Convolutional Networks"
  * by Yang You, Igor Gitman, and Boris Ginsburg (2017)
  * https://arxiv.org/abs/1708.03888
  * 
- * CORRECTIONS MADE:
- * - Uses the new alexnet_LARS.dml implementation
- * - Real backward pass instead of dummy gradients
- * - Proper integration with existing lars.dml and lars_util.dml
- * - Fixed learning rate scheduling using lars_util.dml
+ * ResNet50 achieves state-of-the-art results on ImageNet with LARS,
+ * maintaining accuracy even with batch sizes up to 32K.
  */
 
-# CORRECTED: Import the new AlexNet implementation with LARS support
-source("nn/networks/alexnet_LARS.dml") as alexnet
+# Import the ResNet50 implementation with LARS support (DEBUG VERSION)
+source("nn/networks/resnet50_LARS_debug.dml") as resnet50
 
-# Import utility functions and existing LARS modules
+# Import utility functions and LARS modules
 source("nn/util.dml") as util
 source("nn/optim/lars_util.dml") as lars_util
 source("nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
 source("nn/layers/l2_reg.dml") as l2_reg
+source("nn/layers/softmax.dml") as softmax
 
-# CORRECTED: Main training script with proper implementation
-train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base_lr=-1.0)
+# Main training script
+train_resnet50_lars = function(int batch_size=256, int epochs=-1, double base_lr=-1.0)
     return (list[unknown] model, matrix[double] metrics) {
   /*
-   * CORRECTED: Train AlexNet-BN on ImageNet using LARS optimizer
-   * following the hyperparameters from Table 3 of the LARS paper
+   * Train ResNet50 on ImageNet using LARS optimizer
+   * following the hyperparameters from Table 4 of the LARS paper
    *
    * Inputs:
-   * - batch_size: Training batch size (default 1024 for demo)
+   * - batch_size: Training batch size (default 256)
    * - epochs: Number of epochs (default from LARS paper recommendations)
    * - base_lr: Base learning rate (default from LARS paper recommendations)
    *
@@ -63,7 +60,7 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
    * - metrics: Training metrics [train_loss, train_acc, val_loss, val_acc] per epoch
    */
   
-  print("=== CORRECTED: AlexNet-BN ImageNet Training with LARS ===")
+  print("=== ResNet50 ImageNet Training with LARS ===")
   
   # Dataset parameters (ImageNet)
   C = 3          # RGB channels
@@ -72,7 +69,7 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
   num_classes = 10  # Reduced classes for demo (use 1000 for full ImageNet)
   
   # Get recommended hyperparameters if not provided
-  [recommended_lr, warmup_epochs, recommended_epochs] = alexnet::get_lars_hyperparams(batch_size, TRUE)
+  [recommended_lr, warmup_epochs, recommended_epochs] = resnet50::get_lars_hyperparams(batch_size, TRUE)
   if (epochs == -1) {
     epochs = recommended_epochs
   }
@@ -80,9 +77,9 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     base_lr = recommended_lr
   }
   
-  # LARS-specific parameters from paper (Table 3)
+  # LARS-specific parameters from paper (Table 4)
   momentum = 0.9
-  weight_decay = 0.0005
+  weight_decay = 0.0001  # ResNet50 uses less weight decay than AlexNet
   trust_coeff = 0.001
   base_batch_size = 256  # Reference batch size for LR scaling
   decay_power = 2        # Polynomial decay
@@ -112,12 +109,12 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
   print("Validation samples: " + N_val)
   print("")
   
-  # Initialize AlexNet-BN model
-  print("Initializing AlexNet-BN model...")
-  [model, emas] = alexnet::init_with_bn(C, Hin, Win, num_classes, seed)
+  # Initialize ResNet50 model
+  print("Initializing ResNet50 model...")
+  [model, emas] = resnet50::init(num_classes, seed)
   
-  # CORRECTED: Initialize LARS optimizer state properly
-  optim_state = alexnet::init_lars_optim_params(model)
+  # Initialize LARS optimizer state
+  optim_state = resnet50::init_lars_optim_params(model)
   
   # Training metrics
   train_losses = matrix(0, rows=epochs, cols=1)
@@ -140,13 +137,13 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     epoch_loss = 0
     epoch_acc = 0
     
-    # IMPROVEMENT: Add data shuffling for better training
+    # TODO: Add data shuffling for better training
     # permutation = sample(N_train, N_train, FALSE)
     # X_train = X_train[permutation,]
     # Y_train = Y_train[permutation,]
     
     for (iter in 1:iters_per_epoch) {
-      # CORRECTED: Get learning rate with warmup and decay using lars_util
+      # Get learning rate with warmup and decay using lars_util
       lr = lars_util::get_lr_with_warmup(base_lr, epoch, iter, epochs, 
                                          iters_per_epoch, batch_size, 
                                          base_batch_size, warmup_epochs, decay_power)
@@ -157,35 +154,30 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
       X_batch = X_train[beg:end,]
       Y_batch = Y_train[beg:end,]
       
-      # Forward pass with batch normalization
-      [predictions, cached_out, emas_upd] = alexnet::forward_with_bn(
-          X_batch, C, Hin, Win, model, "train", 0.5)
+      # Forward pass
+      [predictions, emas_upd, cached_out, cached_means_vars] = resnet50::forward(
+          X_batch, Hin, Win, model, "train", emas)
       
-      # CORRECTED: Update exponential moving averages properly
-      # EMAs are stored at specific indices in the model
-      model[5] = as.matrix(emas_upd[1])   # ema_mean1
-      model[6] = as.matrix(emas_upd[2])   # ema_var1
-      model[11] = as.matrix(emas_upd[3])  # ema_mean2
-      model[12] = as.matrix(emas_upd[4])  # ema_var2
-      model[17] = as.matrix(emas_upd[5])  # ema_mean3
-      model[18] = as.matrix(emas_upd[6])  # ema_var3
-      model[23] = as.matrix(emas_upd[7])  # ema_mean4
-      model[24] = as.matrix(emas_upd[8])  # ema_var4
-      model[29] = as.matrix(emas_upd[9])  # ema_mean5
-      model[30] = as.matrix(emas_upd[10]) # ema_var5
+      # Update EMAs
+      emas = emas_upd
       
       # Compute loss and accuracy
-      batch_loss = alexnet::compute_loss(predictions, Y_batch, model, weight_decay)
-      batch_acc = alexnet::compute_accuracy(predictions, Y_batch)
+      batch_loss = resnet50::compute_loss(predictions, Y_batch, model, weight_decay)
+      batch_acc = resnet50::compute_accuracy(predictions, Y_batch)
       epoch_loss = epoch_loss + batch_loss
       epoch_acc = epoch_acc + batch_acc
       
-      # CORRECTED: Real backward pass computation
-      dprobs = cross_entropy_loss::backward(predictions, Y_batch)
-      [dX, gradients] = alexnet::backward_with_bn(dprobs, cached_out, model, C, Hin, Win, 0.5)
+      # Backward pass
+      # For softmax + cross-entropy, the combined gradient is simply predictions - targets
+      # First apply softmax to get probabilities
+      predictions_stable = predictions - rowMaxs(predictions)
+      probs = softmax::forward(predictions_stable)
+      # Combined gradient
+      dlogits = (1.0/nrow(Y_batch)) * (probs - Y_batch)
+      [dX, gradients] = resnet50::backward(dlogits, cached_out, model, cached_means_vars)
       
-      # CORRECTED: Update with LARS using the proper algorithm
-      [model, optim_state] = alexnet::update_params_with_lars(
+      # Update with LARS
+      [model, optim_state] = resnet50::update_params_with_lars(
           model, gradients, lr, momentum, weight_decay, trust_coeff, optim_state)
       
       # Print progress every 50 iterations
@@ -204,8 +196,8 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     
     # Validation
     print("Running validation...")
-    [val_loss, val_acc] = alexnet::evaluate_with_bn(
-        X_val, Y_val, C, Hin, Win, model, min(batch_size, 256))
+    [val_loss, val_acc] = resnet50::evaluate(
+        X_val, Y_val, Hin, Win, model, emas, min(batch_size, 256))
     val_losses[epoch,1] = val_loss
     val_accs[epoch,1] = val_acc
     
@@ -224,8 +216,8 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     
     # Save checkpoint every 10 epochs
     if (epoch %% 10 == 0) {
-      checkpoint_file = "alexnet_bn_lars_batch" + batch_size + "_epoch" + epoch
-      save_checkpoint(model, optim_state, epoch, checkpoint_file)
+      checkpoint_file = "resnet50_lars_batch" + batch_size + "_epoch" + epoch
+      save_checkpoint(model, optim_state, emas, epoch, checkpoint_file)
     }
   }
   
@@ -240,33 +232,33 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
   metrics = cbind(train_losses, train_accs, val_losses, val_accs)
 }
 
-# IMPROVED: Data loading function with better dummy data
+# Data loading function
 load_imagenet_data = function(int Hin, int Win, int num_classes)
     return (matrix[double] X_train, matrix[double] Y_train,
             matrix[double] X_val, matrix[double] Y_val) {
   /*
-   * IMPROVED: Load and preprocess ImageNet data
-   * Creates more realistic dummy data for demonstration
+   * Load and preprocess ImageNet data
+   * Creates dummy data for demonstration
    */
   
   # For testing, create dummy data
   # In practice, load actual ImageNet data here
-  print("NOTE: Using improved dummy data for demonstration. Replace with actual ImageNet loading.")
+  print("NOTE: Using dummy data for demonstration. Replace with actual ImageNet loading.")
   
-  N_train = 500   # Larger dataset for better training dynamics
-  N_val = 100     # Larger validation set
+  # ResNet50 typically trains on larger datasets
+  N_train = 1000   # Reduced for demo (ImageNet has 1.2M)
+  N_val = 200      # Reduced for demo (ImageNet has 50K)
   D = 3 * Hin * Win
   
-  # Generate more realistic dummy data with proper normalization
+  # Generate dummy data with ImageNet-like statistics
   X_train = rand(rows=N_train, cols=D, min=0, max=1, seed=42)
-  # Normalize to ImageNet statistics: mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-  # Simple approximation: center around 0.5 and scale
+  # Normalize to ImageNet statistics
   X_train = (X_train - 0.5) * 0.5 + 0.5
   
   X_val = rand(rows=N_val, cols=D, min=0, max=1, seed=43)
   X_val = (X_val - 0.5) * 0.5 + 0.5
   
-  # Generate labels with some structure (not completely random)
+  # Generate labels
   Y_train = table(seq(1, N_train), sample(num_classes, N_train, TRUE, 42), N_train, num_classes)
   Y_val = table(seq(1, N_val), sample(num_classes, N_val, TRUE, 43), N_val, num_classes)
   
@@ -276,30 +268,26 @@ load_imagenet_data = function(int Hin, int Win, int num_classes)
 
 # Checkpoint saving
 save_checkpoint = function(list[unknown] model, list[unknown] optim_state, 
-                          int epoch, string filename) {
+                          list[unknown] emas, int epoch, string filename) {
   /*
-   * Save model checkpoint with better structure
+   * Save model checkpoint
    */
   print("Checkpoint saved: " + filename + " (placeholder)")
-  # In practice, implement proper saving:
-  # write(model, filename + "_model.bin", format="binary")
-  # write(optim_state, filename + "_optim.bin", format="binary")
-  # write(as.matrix(epoch), filename + "_epoch.txt", format="text")
+  # TODO: Implement proper saving
 }
 
-# CORRECTED: Function to run experiments with different batch sizes
+# Function to run experiments with different batch sizes
 run_lars_batch_size_experiments = function() {
   /*
-   * CORRECTED: Run experiments with different batch sizes as in LARS paper Table 3
-   * This reproduces the key results showing linear scaling of learning rate
-   * with batch size while maintaining accuracy.
+   * Run experiments with different batch sizes as in LARS paper Table 4
+   * ResNet50 shows excellent scaling properties with LARS.
    */
   
-  print("Running CORRECTED LARS batch size scaling experiments")
-  print("Based on Table 3 from 'Large Batch Training of Convolutional Networks'")
+  print("Running ResNet50 LARS batch size scaling experiments")
+  print("Based on Table 4 from 'Large Batch Training of Convolutional Networks'")
   print("")
   
-  # Realistic batch sizes for demonstration (scaled down from paper)
+  # Batch sizes to test (scaled down for demo)
   batch_sizes = matrix("256 512 1024 2048", rows=1, cols=4)
   
   results = matrix(0, rows=ncol(batch_sizes), cols=5)
@@ -312,13 +300,13 @@ run_lars_batch_size_experiments = function() {
     print("========================================")
     
     # Get recommended hyperparameters
-    [base_lr, warmup_epochs, epochs] = alexnet::get_lars_hyperparams(bs, TRUE)
+    [base_lr, warmup_epochs, epochs] = resnet50::get_lars_hyperparams(bs, TRUE)
     
     # Use reduced epochs for demonstration
-    epochs = 3
+    epochs = 2
     
     # Run training
-    [model, metrics] = train_alexnet_bn_lars(bs, epochs, base_lr)
+    [model, metrics] = train_resnet50_lars(bs, epochs, base_lr)
     
     # Record results
     final_val_acc = as.scalar(metrics[epochs, 4])
@@ -329,12 +317,12 @@ run_lars_batch_size_experiments = function() {
     results[i, 5] = final_val_acc
     
     # Save results
-    # write(metrics, "alexnet_bn_lars_metrics_batch_" + bs + ".csv", format="csv")
+    # write(metrics, "resnet50_lars_metrics_batch_" + bs + ".csv", format="csv")
   }
   
   # Print summary table
   print("")
-  print("=== CORRECTED LARS Batch Size Scaling Results ===")
+  print("=== ResNet50 LARS Batch Size Scaling Results ===")
   print("Batch Size | Base LR | Scaled LR | Epochs | Val Acc")
   print("------------------------------------------------------")
   for (i in 1:nrow(results)) {
@@ -345,56 +333,35 @@ run_lars_batch_size_experiments = function() {
           as.scalar(results[i,5]))
   }
   
-  # write(results, "alexnet_bn_lars_scaling_results.csv", format="csv")
+  # write(results, "resnet50_lars_scaling_results.csv", format="csv")
 }
 
-# CORRECTED: Quick test function for validation
+# Quick test function
 quick_test = function() {
   /*
    * Quick test to validate the implementation is working
    */
-  print("=== Quick AlexNet-BN LARS Test ===")
+  print("=== Quick ResNet50 LARS Test ===")
   
-  # Small test
-  C = 3
-  Hin = 224
-  Win = 224
-  num_classes = 10
-  batch_size = 8
+  # Use the built-in test from resnet50_LARS.dml
+  resnet50::quick_test()
   
-  # Create small test data
-  X_test = rand(rows=batch_size, cols=C*Hin*Win, min=0, max=1, seed=123)
-  Y_test = table(seq(1, batch_size), sample(num_classes, batch_size, TRUE, 123), batch_size, num_classes)
+  # Additional test with training loop
+  print("")
+  print("Testing training loop...")
   
-  # Initialize model
-  [model, emas] = alexnet::init_with_bn(C, Hin, Win, num_classes, 42)
-  optim_state = alexnet::init_lars_optim_params(model)
+  # Small parameters for quick test
+  batch_size = 4
+  epochs = 1
   
-  # Test forward pass
-  [predictions, cached_out, emas_upd] = alexnet::forward_with_bn(
-      X_test, C, Hin, Win, model, "train", 0.5)
+  # Run mini training
+  [model, metrics] = train_resnet50_lars(batch_size, epochs, 0.01)
   
-  print("Forward pass successful!")
-  print("Prediction shape: " + nrow(predictions) + "x" + ncol(predictions))
-  print("Prediction sum (should be ~" + batch_size + "): " + sum(rowSums(predictions)))
-  
-  # Test backward pass
-  dprobs = cross_entropy_loss::backward(predictions, Y_test)
-  [dX, gradients] = alexnet::backward_with_bn(dprobs, cached_out, model, C, Hin, Win, 0.5)
-  
-  print("Backward pass successful!")
-  print("Gradient count: " + length(gradients))
-  
-  # Test LARS update
-  [model_upd, optim_state_upd] = alexnet::update_params_with_lars(
-      model, gradients, 0.01, 0.9, 0.0005, 0.001, optim_state)
-  
-  print("LARS update successful!")
-  print("✅ All tests passed! Implementation is working correctly.")
+  print("✅ Training loop test passed!")
 }
 
-# Main execution with options
-print("CORRECTED: AlexNet-BN ImageNet Training with LARS")
+# Main execution
+print("ResNet50 ImageNet Training with LARS")
 print("Based on 'Large Batch Training of Convolutional Networks'")
 print("")
 
@@ -402,16 +369,16 @@ print("")
 quick_test()
 print("")
 
-# Option 2: Train with smaller batch size for demonstration
+# Option 2: Train with specific batch size
 print("Running training demo...")
-[model, metrics] = train_alexnet_bn_lars(64, 2, 0.02)
+[model, metrics] = train_resnet50_lars(32, 2, 0.1)
 
 # Save final model and metrics
-# write(metrics, "alexnet_bn_lars_metrics.csv", format="csv")
-# print("Training metrics saved to alexnet_bn_lars_metrics.csv")
+# write(metrics, "resnet50_lars_metrics.csv", format="csv")
+# print("Training metrics saved to resnet50_lars_metrics.csv")
 
 # Option 3: Run full batch size scaling experiments (uncomment to run)
 # run_lars_batch_size_experiments()
 
 print("")
-print("CORRECTED Example completed successfully!")
+print("Example completed successfully!")
