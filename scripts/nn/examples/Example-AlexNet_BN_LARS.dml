@@ -245,33 +245,144 @@ load_imagenet_data = function(int Hin, int Win, int num_classes)
     return (matrix[double] X_train, matrix[double] Y_train,
             matrix[double] X_val, matrix[double] Y_val) {
   /*
-   * IMPROVED: Load and preprocess ImageNet data
-   * Creates more realistic dummy data for demonstration
+   * Load and preprocess ImageNet data from CSV files or binary files
+   * Ensures dense matrices to avoid sparse matrix multiplication issues
    */
   
-  # For testing, create dummy data
-  # In practice, load actual ImageNet data here
-  print("NOTE: Using improved dummy data for demonstration. Replace with actual ImageNet loading.")
+  # Choose data source: "csv", "binary", or "dummy"
+  data_source = "dummy"  # Change to "binary" after running load_imagenet_csv.dml
   
-  N_train = 500   # Larger dataset for better training dynamics
-  N_val = 100     # Larger validation set
-  D = 3 * Hin * Win
+  if (data_source == "binary") {
+    print("Loading ImageNet data from binary files...")
+    
+    # Load from binary files (much faster than CSV)
+    X_train = read("imagenet_data/train_data.bin", format="binary")
+    Y_train = read("imagenet_data/train_labels.bin", format="binary")
+    X_val = read("imagenet_data/val_data.bin", format="binary")
+    Y_val = read("imagenet_data/val_labels.bin", format="binary")
+    
+    # Force dense
+    X_train = X_train + 0
+    Y_train = Y_train + 0
+    X_val = X_val + 0
+    Y_val = Y_val + 0
+    
+    # Apply additional normalization for ImageNet (already normalized to [0,1])
+    # Convert to [-1, 1] range
+    X_train = (X_train - 0.5) * 2.0
+    X_val = (X_val - 0.5) * 2.0
+    
+    N_train = nrow(X_train)
+    N_val = nrow(X_val)
+    
+    print("Data loaded from binary files:")
+    print("- Training samples: " + N_train)
+    print("- Validation samples: " + N_val)
+    print("- Feature dimension: " + ncol(X_train))
+    print("- Classes: " + num_classes)
+    
+  } else if (data_source == "csv") {
+    print("Loading ImageNet data from CSV files...")
+    print("WARNING: CSV loading can cause path issues on Windows. Consider using binary format.")
+    
+    # Use relative paths to CSV files
+    train_file = "imagenet_data/imagenet_train.csv"
+    val_file = "imagenet_data/imagenet_val.csv"
+    
+    # Read CSV files - format is: label, pixel_1, pixel_2, ..., pixel_n
+    train_data = read(train_file, format="csv", header=FALSE)
+    val_data = read(val_file, format="csv", header=FALSE)
+    
+    # Force to dense by adding 0 if sparse
+    train_data = train_data + 0
+    val_data = val_data + 0
+    
+    # Extract labels (first column) and features (remaining columns)
+    Y_train_labels = train_data[,1]
+    X_train = train_data[,2:ncol(train_data)]
+    
+    Y_val_labels = val_data[,1]
+    X_val = val_data[,2:ncol(val_data)]
+    
+    # Get dataset sizes
+    N_train = nrow(X_train)
+    N_val = nrow(X_val)
+    
+    # Normalize pixel values to [0, 1]
+    X_train = X_train / 255.0
+    X_val = X_val / 255.0
+    
+    # Apply ImageNet normalization (mean and std)
+    # For simplicity, we'll normalize to [-1, 1] range
+    X_train = (X_train - 0.5) * 2.0
+    X_val = (X_val - 0.5) * 2.0
+    
+    # Convert labels to one-hot encoding
+    # Ensure labels are in range [1, num_classes]
+    Y_train_labels = Y_train_labels + 1  # Convert 0-based to 1-based if needed
+    Y_val_labels = Y_val_labels + 1
+    
+    # Create one-hot encoded matrices
+    Y_train = table(seq(1, N_train), Y_train_labels, N_train, num_classes)
+    Y_val = table(seq(1, N_val), Y_val_labels, N_val, num_classes)
+    
+    # Ensure all matrices are dense by adding 0
+    X_train = X_train + 0
+    X_val = X_val + 0
+    Y_train = Y_train + 0
+    Y_val = Y_val + 0
+    
+    print("Data loaded from CSV files:")
+    print("- Training samples: " + N_train)
+    print("- Validation samples: " + N_val)
+    print("- Feature dimension: " + ncol(X_train))
+    print("- Classes: " + num_classes)
+    
+  } else {
+    # Fallback to dense dummy data for testing
+    print("Using dense dummy data for demonstration.")
+    print("To use real data:")
+    print("1. Run: java -Xmx4g -cp \"target/systemds-3.4.0-SNAPSHOT.jar:target/lib/*\" org.apache.sysds.api.DMLScript -f scripts/nn/examples/load_imagenet_csv.dml")
+    print("2. Change data_source to \"binary\" in this script")
+    print("")
+    
+    N_train = 500
+    N_val = 100
+    D = 3 * Hin * Win
+    
+    # Generate dense random data
+    X_train = rand(rows=N_train, cols=D, min=0.0, max=1.0, pdf="uniform", seed=42)
+    X_val = rand(rows=N_val, cols=D, min=0.0, max=1.0, pdf="uniform", seed=43)
+    
+    # Normalize to [-1, 1]
+    X_train = (X_train - 0.5) * 2.0
+    X_val = (X_val - 0.5) * 2.0
+    
+    # Generate random labels with balanced distribution
+    train_labels = sample(num_classes, N_train, TRUE, 42)
+    val_labels = sample(num_classes, N_val, TRUE, 43)
+    
+    # Convert to one-hot encoding
+    Y_train = table(seq(1, N_train), train_labels, N_train, num_classes)
+    Y_val = table(seq(1, N_val), val_labels, N_val, num_classes)
+    
+    # Ensure dense matrices by adding 0
+    X_train = X_train + 0
+    X_val = X_val + 0
+    Y_train = Y_train + 0
+    Y_val = Y_val + 0
+    
+    print("Dense dummy data generated:")
+    print("- Training samples: " + N_train)
+    print("- Validation samples: " + N_val)
+  }
   
-  # Generate more realistic dummy data with proper normalization
-  X_train = rand(rows=N_train, cols=D, min=0, max=1, seed=42)
-  # Normalize to ImageNet statistics: mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-  # Simple approximation: center around 0.5 and scale
-  X_train = (X_train - 0.5) * 0.5 + 0.5
-  
-  X_val = rand(rows=N_val, cols=D, min=0, max=1, seed=43)
-  X_val = (X_val - 0.5) * 0.5 + 0.5
-  
-  # Generate labels with some structure (not completely random)
-  Y_train = table(seq(1, N_train), sample(num_classes, N_train, TRUE, 42), N_train, num_classes)
-  Y_val = table(seq(1, N_val), sample(num_classes, N_val, TRUE, 43), N_val, num_classes)
-  
-  print("Data loaded: " + N_train + " training samples, " + N_val + " validation samples")
-  print("Input dimensions: " + Hin + "x" + Win + "x3, Classes: " + num_classes)
+  # Final check: ensure no sparse matrices
+  print("")
+  print("Data matrix properties:")
+  print("X_train density: " + (sum(X_train != 0) / (nrow(X_train) * ncol(X_train))))
+  print("Y_train density: " + (sum(Y_train != 0) / (nrow(Y_train) * ncol(Y_train))))
+  print("")
 }
 
 # Checkpoint saving

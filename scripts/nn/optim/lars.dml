@@ -55,26 +55,27 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double mu,
   
   # Compute L2 norms
   X_norm = sqrt(sum(X^2))
-  dX_norm = sqrt(sum(dX_wd^2))
+  dX_norm = sqrt(sum(dX^2))  # Use gradient norm WITHOUT weight decay for LARS computation
   
   # Compute local learning rate according to LARS paper
-  # λ_l = η × ||w|| / (||∇L(w)|| + β||w||)
-  # where η is trust_coeff, β is lambda (weight decay)
+  # The exact formula from the paper is:
+  # local_lr = trust_coeff * ||w|| / ||∇L(w)||
+  # where trust_coeff (η) is typically 0.001
   epsilon = 1e-8
-  local_lr = trust_coeff * X_norm / (dX_norm + lambda * X_norm + epsilon)
+  local_lr = trust_coeff * X_norm / (dX_norm + epsilon)
   
   # Apply global learning rate scaling
-  # Note: In the paper, they use lr * local_lr, but also mention
-  # that for bias terms, they often skip LARS and use regular SGD
+  # The paper mentions that for bias and BN parameters, they skip LARS
   effective_lr = lr * local_lr
   
-  # For very small layers (like biases), we might want to cap the local_lr
-  # to avoid instability
-  if (X_norm < 1e-3) {
+  # For very small layers (like biases), skip LARS and use regular SGD
+  # This follows the paper's recommendation for bias terms
+  if (X_norm < 1e-3 | ncol(X) == 1) {  # Check for small params or bias vectors
     effective_lr = lr  # Use global lr for small parameters (like biases)
   }
   
   # SGD with momentum update using the adaptive learning rate
+  # Note: We still use dX_wd (gradient with weight decay) for the actual update
   v = mu * v - effective_lr * dX_wd
   X = X + v
 }

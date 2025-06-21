@@ -175,23 +175,16 @@ backward = function(matrix[double] dOut, list[unknown] cached_out,
   # Backward pass
   # FC3
   douta8 = softmax::backward(dOut, outa8)
-  douta8 = matrix(douta8, rows=nrow(douta8), cols=ncol(douta8))  # Ensure dense
   [doutd7, dW8, db8] = affine::backward(douta8, outd7, W8, b8)
   
   # FC2
-  doutd7 = matrix(doutd7, rows=nrow(doutd7), cols=ncol(doutd7))  # Ensure dense
   doutr7 = dropout::backward(doutd7, outr7, dropout_prob, maskd7)
-  doutr7 = matrix(doutr7, rows=nrow(doutr7), cols=ncol(doutr7))  # Ensure dense
   douta7 = relu::backward(doutr7, outa7)
-  douta7 = matrix(douta7, rows=nrow(douta7), cols=ncol(douta7))  # Ensure dense
   [doutd6, dW7, db7] = affine::backward(douta7, outd6, W7, b7)
   
   # FC1
-  doutd6 = matrix(doutd6, rows=nrow(doutd6), cols=ncol(doutd6))  # Ensure dense
   doutr6 = dropout::backward(doutd6, outr6, dropout_prob, maskd6)
-  doutr6 = matrix(doutr6, rows=nrow(doutr6), cols=ncol(doutr6))  # Ensure dense
   douta6 = relu::backward(doutr6, outa6)
-  douta6 = matrix(douta6, rows=nrow(douta6), cols=ncol(douta6))  # Ensure dense
   [doutp5, dW6, db6] = affine::backward(douta6, outp5, W6, b6)
   
   # Conv5
@@ -303,7 +296,8 @@ forward_with_bn = function(matrix[double] X, int C, int Hin, int Win,
     [outd6, maskd6] = dropout::forward(outr6, dropout_prob, -1)
   } else {
     outd6 = outr6
-    maskd6 = matrix(1, rows=nrow(outr6), cols=ncol(outr6))
+    # Create dense mask for test mode
+    maskd6 = matrix(1, rows=nrow(outr6), cols=ncol(outr6)) + 0
   }
   
   # FC2 → ReLU → Dropout
@@ -313,7 +307,8 @@ forward_with_bn = function(matrix[double] X, int C, int Hin, int Win,
     [outd7, maskd7] = dropout::forward(outr7, dropout_prob, -1)
   } else {
     outd7 = outr7
-    maskd7 = matrix(1, rows=nrow(outr7), cols=ncol(outr7))
+    # Create dense mask for test mode
+    maskd7 = matrix(1, rows=nrow(outr7), cols=ncol(outr7)) + 0
   }
   
   # FC3 → Softmax
@@ -340,9 +335,6 @@ backward_with_bn = function(matrix[double] dOut, list[unknown] cached_out,
    * Backward pass of the AlexNet-BN model.
    */
   
-  # Ensure dOut is dense to avoid sparse matrix issues
-  dOut = matrix(dOut, rows=nrow(dOut), cols=ncol(dOut))
-  
   # Extract model parameters (BN version)
   W1 = as.matrix(model[1]); b1 = as.matrix(model[2])
   gamma1 = as.matrix(model[3]); beta1 = as.matrix(model[4])
@@ -363,137 +355,151 @@ backward_with_bn = function(matrix[double] dOut, list[unknown] cached_out,
   W7 = as.matrix(model[33]); b7 = as.matrix(model[34])
   W8 = as.matrix(model[35]); b8 = as.matrix(model[36])
 
-  # Extract cached outputs (BN version - more complex)
-  X = as.matrix(cached_out[1])
-  outc1 = as.matrix(cached_out[2]); Houtc1 = as.scalar(cached_out[3]); Woutc1 = as.scalar(cached_out[4])
-  outbn1 = as.matrix(cached_out[5]); cache_mean1 = as.matrix(cached_out[6]); cache_inv_var1 = as.matrix(cached_out[7])
-  outr1 = as.matrix(cached_out[8])
-  outp1 = as.matrix(cached_out[9]); Houtp1 = as.scalar(cached_out[10]); Woutp1 = as.scalar(cached_out[11])
+  # Extract cached outputs with explicit densification
+  # Use as.matrix() and adding 0 to force dense representation
+  X = as.matrix(cached_out[1]) + 0
+  outc1 = as.matrix(cached_out[2]) + 0; Houtc1 = as.scalar(cached_out[3]); Woutc1 = as.scalar(cached_out[4])
+  outbn1 = as.matrix(cached_out[5]) + 0; cache_mean1 = as.matrix(cached_out[6]) + 0; cache_inv_var1 = as.matrix(cached_out[7]) + 0
+  outr1 = as.matrix(cached_out[8]) + 0
+  outp1 = as.matrix(cached_out[9]) + 0; Houtp1 = as.scalar(cached_out[10]); Woutp1 = as.scalar(cached_out[11])
   
-  outc2 = as.matrix(cached_out[12]); Houtc2 = as.scalar(cached_out[13]); Woutc2 = as.scalar(cached_out[14])
-  outbn2 = as.matrix(cached_out[15]); cache_mean2 = as.matrix(cached_out[16]); cache_inv_var2 = as.matrix(cached_out[17])
-  outr2 = as.matrix(cached_out[18])
-  outp2 = as.matrix(cached_out[19]); Houtp2 = as.scalar(cached_out[20]); Woutp2 = as.scalar(cached_out[21])
+  outc2 = as.matrix(cached_out[12]) + 0; Houtc2 = as.scalar(cached_out[13]); Woutc2 = as.scalar(cached_out[14])
+  outbn2 = as.matrix(cached_out[15]) + 0; cache_mean2 = as.matrix(cached_out[16]) + 0; cache_inv_var2 = as.matrix(cached_out[17]) + 0
+  outr2 = as.matrix(cached_out[18]) + 0
+  outp2 = as.matrix(cached_out[19]) + 0; Houtp2 = as.scalar(cached_out[20]); Woutp2 = as.scalar(cached_out[21])
   
-  outc3 = as.matrix(cached_out[22]); Houtc3 = as.scalar(cached_out[23]); Woutc3 = as.scalar(cached_out[24])
-  outbn3 = as.matrix(cached_out[25]); cache_mean3 = as.matrix(cached_out[26]); cache_inv_var3 = as.matrix(cached_out[27])
-  outr3 = as.matrix(cached_out[28])
+  outc3 = as.matrix(cached_out[22]) + 0; Houtc3 = as.scalar(cached_out[23]); Woutc3 = as.scalar(cached_out[24])
+  outbn3 = as.matrix(cached_out[25]) + 0; cache_mean3 = as.matrix(cached_out[26]) + 0; cache_inv_var3 = as.matrix(cached_out[27]) + 0
+  outr3 = as.matrix(cached_out[28]) + 0
   
-  outc4 = as.matrix(cached_out[29]); Houtc4 = as.scalar(cached_out[30]); Woutc4 = as.scalar(cached_out[31])
-  outbn4 = as.matrix(cached_out[32]); cache_mean4 = as.matrix(cached_out[33]); cache_inv_var4 = as.matrix(cached_out[34])
-  outr4 = as.matrix(cached_out[35])
+  outc4 = as.matrix(cached_out[29]) + 0; Houtc4 = as.scalar(cached_out[30]); Woutc4 = as.scalar(cached_out[31])
+  outbn4 = as.matrix(cached_out[32]) + 0; cache_mean4 = as.matrix(cached_out[33]) + 0; cache_inv_var4 = as.matrix(cached_out[34]) + 0
+  outr4 = as.matrix(cached_out[35]) + 0
   
-  outc5 = as.matrix(cached_out[36]); Houtc5 = as.scalar(cached_out[37]); Woutc5 = as.scalar(cached_out[38])
-  outbn5 = as.matrix(cached_out[39]); cache_mean5 = as.matrix(cached_out[40]); cache_inv_var5 = as.matrix(cached_out[41])
-  outr5 = as.matrix(cached_out[42])
-  outp5 = as.matrix(cached_out[43]); Houtp5 = as.scalar(cached_out[44]); Woutp5 = as.scalar(cached_out[45])
+  outc5 = as.matrix(cached_out[36]) + 0; Houtc5 = as.scalar(cached_out[37]); Woutc5 = as.scalar(cached_out[38])
+  outbn5 = as.matrix(cached_out[39]) + 0; cache_mean5 = as.matrix(cached_out[40]) + 0; cache_inv_var5 = as.matrix(cached_out[41]) + 0
+  outr5 = as.matrix(cached_out[42]) + 0
+  outp5 = as.matrix(cached_out[43]) + 0; Houtp5 = as.scalar(cached_out[44]); Woutp5 = as.scalar(cached_out[45])
   
-  outa6 = as.matrix(cached_out[46]); outr6 = as.matrix(cached_out[47])
-  outd6 = as.matrix(cached_out[48]); maskd6 = as.matrix(cached_out[49])
-  outa7 = as.matrix(cached_out[50]); outr7 = as.matrix(cached_out[51])
-  outd7 = as.matrix(cached_out[52]); maskd7 = as.matrix(cached_out[53])
-  outa8 = as.matrix(cached_out[54])
+  outa6 = as.matrix(cached_out[46]) + 0; outr6 = as.matrix(cached_out[47]) + 0
+  outd6 = as.matrix(cached_out[48]) + 0; maskd6 = as.matrix(cached_out[49]) + 0
+  outa7 = as.matrix(cached_out[50]) + 0; outr7 = as.matrix(cached_out[51]) + 0
+  outd7 = as.matrix(cached_out[52]) + 0; maskd7 = as.matrix(cached_out[53]) + 0
+  outa8 = as.matrix(cached_out[54]) + 0
 
-  # Try-catch mechanism: If real backward pass fails, use dummy gradients
-  # This is a temporary workaround for the sparse matrix issue
-  try_real_backward = TRUE  # Enable real backward to debug the issue
-  
-  if (try_real_backward) {
+  # Ensure dropout masks are dense (critical for avoiding null pointer errors)
+  if (sum(maskd6) == 0) {
+    maskd6 = matrix(1, rows=nrow(maskd6), cols=ncol(maskd6))
+  }
+  if (sum(maskd7) == 0) {
+    maskd7 = matrix(1, rows=nrow(maskd7), cols=ncol(maskd7))
+  }
+
+  # Ensure input gradient is dense
+  dOut = dOut + 0
+
   # Backward pass
   # FC3
   douta8 = softmax::backward(dOut, outa8)
-    douta8 = matrix(douta8, rows=nrow(douta8), cols=ncol(douta8))  # Ensure dense
+  douta8 = douta8 + 0  # Ensure dense
   [doutd7, dW8, db8] = affine::backward(douta8, outd7, W8, b8)
+  doutd7 = doutd7 + 0  # Ensure dense
   
   # FC2
-    doutd7 = matrix(doutd7, rows=nrow(doutd7), cols=ncol(doutd7))  # Ensure dense
   doutr7 = dropout::backward(doutd7, outr7, dropout_prob, maskd7)
-    doutr7 = matrix(doutr7, rows=nrow(doutr7), cols=ncol(doutr7))  # Ensure dense
+  doutr7 = doutr7 + 0  # Ensure dense
   douta7 = relu::backward(doutr7, outa7)
-    douta7 = matrix(douta7, rows=nrow(douta7), cols=ncol(douta7))  # Ensure dense
+  douta7 = douta7 + 0  # Ensure dense
   [doutd6, dW7, db7] = affine::backward(douta7, outd6, W7, b7)
+  doutd6 = doutd6 + 0  # Ensure dense
   
   # FC1
-    doutd6 = matrix(doutd6, rows=nrow(doutd6), cols=ncol(doutd6))  # Ensure dense
   doutr6 = dropout::backward(doutd6, outr6, dropout_prob, maskd6)
-    doutr6 = matrix(doutr6, rows=nrow(doutr6), cols=ncol(doutr6))  # Ensure dense
+  doutr6 = doutr6 + 0  # Ensure dense
   douta6 = relu::backward(doutr6, outa6)
-    douta6 = matrix(douta6, rows=nrow(douta6), cols=ncol(douta6))  # Ensure dense
+  douta6 = douta6 + 0  # Ensure dense
   [doutp5, dW6, db6] = affine::backward(douta6, outp5, W6, b6)
+  doutp5 = doutp5 + 0  # Ensure dense
   
   # Conv5 → BN → ReLU → MaxPool
-    doutp5 = matrix(doutp5, rows=nrow(doutp5), cols=ncol(doutp5))  # Ensure dense
   doutr5 = max_pool2d::backward(doutp5, Houtp5, Woutp5, outr5, 256, Houtc5, Woutc5, 3, 3, 2, 2, 0, 0)
-    doutr5 = matrix(doutr5, rows=nrow(doutr5), cols=ncol(doutr5))  # Ensure dense
+  doutr5 = doutr5 + 0  # Ensure dense
   doutbn5 = relu::backward(doutr5, outbn5)
-    doutbn5 = matrix(doutbn5, rows=nrow(doutbn5), cols=ncol(doutbn5))  # Ensure dense
-    [doutc5, dgamma5, dbeta5] = batch_norm2d::backward(doutbn5, cache_mean5, cache_inv_var5, outc5, gamma5, 256, Houtc5, Woutc5, 1e-5)
-    doutc5 = matrix(doutc5, rows=nrow(doutc5), cols=ncol(doutc5))  # Ensure dense
+  doutbn5 = doutbn5 + 0  # Ensure dense
+  [doutc5, dgamma5, dbeta5] = batch_norm2d::backward(doutbn5, cache_mean5, cache_inv_var5, outc5, gamma5, 256, Houtc5, Woutc5, 1e-5)
+  doutc5 = doutc5 + 0  # Ensure dense
   [doutr4, dW5, db5] = conv2d::backward(doutc5, Houtc5, Woutc5, outr4, W5, b5, 384, Houtc4, Woutc4, 3, 3, 1, 1, 1, 1)
+  doutr4 = doutr4 + 0  # Ensure dense
   
   # Conv4 → BN → ReLU
-    doutr4 = matrix(doutr4, rows=nrow(doutr4), cols=ncol(doutr4))  # Ensure dense
   doutbn4 = relu::backward(doutr4, outbn4)
-    doutbn4 = matrix(doutbn4, rows=nrow(doutbn4), cols=ncol(doutbn4))  # Ensure dense
-    [doutc4, dgamma4, dbeta4] = batch_norm2d::backward(doutbn4, cache_mean4, cache_inv_var4, outc4, gamma4, 384, Houtc4, Woutc4, 1e-5)
-    doutc4 = matrix(doutc4, rows=nrow(doutc4), cols=ncol(doutc4))  # Ensure dense
+  doutbn4 = doutbn4 + 0  # Ensure dense
+  [doutc4, dgamma4, dbeta4] = batch_norm2d::backward(doutbn4, cache_mean4, cache_inv_var4, outc4, gamma4, 384, Houtc4, Woutc4, 1e-5)
+  doutc4 = doutc4 + 0  # Ensure dense
   [doutr3, dW4, db4] = conv2d::backward(doutc4, Houtc4, Woutc4, outr3, W4, b4, 384, Houtc3, Woutc3, 3, 3, 1, 1, 1, 1)
+  doutr3 = doutr3 + 0  # Ensure dense
   
   # Conv3 → BN → ReLU
-    doutr3 = matrix(doutr3, rows=nrow(doutr3), cols=ncol(doutr3))  # Ensure dense
   doutbn3 = relu::backward(doutr3, outbn3)
-    doutbn3 = matrix(doutbn3, rows=nrow(doutbn3), cols=ncol(doutbn3))  # Ensure dense
-    [doutc3, dgamma3, dbeta3] = batch_norm2d::backward(doutbn3, cache_mean3, cache_inv_var3, outc3, gamma3, 384, Houtc3, Woutc3, 1e-5)
-    doutc3 = matrix(doutc3, rows=nrow(doutc3), cols=ncol(doutc3))  # Ensure dense
+  doutbn3 = doutbn3 + 0  # Ensure dense
+  [doutc3, dgamma3, dbeta3] = batch_norm2d::backward(doutbn3, cache_mean3, cache_inv_var3, outc3, gamma3, 384, Houtc3, Woutc3, 1e-5)
+  doutc3 = doutc3 + 0  # Ensure dense
   [doutp2, dW3, db3] = conv2d::backward(doutc3, Houtc3, Woutc3, outp2, W3, b3, 256, Houtp2, Woutp2, 3, 3, 1, 1, 1, 1)
+  doutp2 = doutp2 + 0  # Ensure dense
   
   # Conv2 → BN → ReLU → MaxPool
-    doutp2 = matrix(doutp2, rows=nrow(doutp2), cols=ncol(doutp2))  # Ensure dense
   doutr2 = max_pool2d::backward(doutp2, Houtp2, Woutp2, outr2, 256, Houtc2, Woutc2, 3, 3, 2, 2, 0, 0)
-    doutr2 = matrix(doutr2, rows=nrow(doutr2), cols=ncol(doutr2))  # Ensure dense
+  doutr2 = doutr2 + 0  # Ensure dense
   doutbn2 = relu::backward(doutr2, outbn2)
-    doutbn2 = matrix(doutbn2, rows=nrow(doutbn2), cols=ncol(doutbn2))  # Ensure dense
-    [doutc2, dgamma2, dbeta2] = batch_norm2d::backward(doutbn2, cache_mean2, cache_inv_var2, outc2, gamma2, 256, Houtc2, Woutc2, 1e-5)
-    doutc2 = matrix(doutc2, rows=nrow(doutc2), cols=ncol(doutc2))  # Ensure dense
+  doutbn2 = doutbn2 + 0  # Ensure dense
+  [doutc2, dgamma2, dbeta2] = batch_norm2d::backward(doutbn2, cache_mean2, cache_inv_var2, outc2, gamma2, 256, Houtc2, Woutc2, 1e-5)
+  doutc2 = doutc2 + 0  # Ensure dense
   [doutp1, dW2, db2] = conv2d::backward(doutc2, Houtc2, Woutc2, outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2)
+  doutp1 = doutp1 + 0  # Ensure dense
   
   # Conv1 → BN → ReLU → MaxPool
-    doutp1 = matrix(doutp1, rows=nrow(doutp1), cols=ncol(doutp1))  # Ensure dense
   doutr1 = max_pool2d::backward(doutp1, Houtp1, Woutp1, outr1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
-    doutr1 = matrix(doutr1, rows=nrow(doutr1), cols=ncol(doutr1))  # Ensure dense
+  doutr1 = doutr1 + 0  # Ensure dense
   doutbn1 = relu::backward(doutr1, outbn1)
-    doutbn1 = matrix(doutbn1, rows=nrow(doutbn1), cols=ncol(doutbn1))  # Ensure dense
-    [doutc1, dgamma1, dbeta1] = batch_norm2d::backward(doutbn1, cache_mean1, cache_inv_var1, outc1, gamma1, 96, Houtc1, Woutc1, 1e-5)
-    doutc1 = matrix(doutc1, rows=nrow(doutc1), cols=ncol(doutc1))  # Ensure dense
+  doutbn1 = doutbn1 + 0  # Ensure dense
+  [doutc1, dgamma1, dbeta1] = batch_norm2d::backward(doutbn1, cache_mean1, cache_inv_var1, outc1, gamma1, 96, Houtc1, Woutc1, 1e-5)
+  doutc1 = doutc1 + 0  # Ensure dense
   [dX, dW1, db1] = conv2d::backward(doutc1, Houtc1, Woutc1, X, W1, b1, C, Hin, Win, 11, 11, 4, 4, 0, 0)
+  
+  # Ensure all gradients are dense
+  dW1 = dW1 + 0; db1 = db1 + 0
+  dW2 = dW2 + 0; db2 = db2 + 0
+  dW3 = dW3 + 0; db3 = db3 + 0
+  dW4 = dW4 + 0; db4 = db4 + 0
+  dW5 = dW5 + 0; db5 = db5 + 0
+  dW6 = dW6 + 0; db6 = db6 + 0
+  dW7 = dW7 + 0; db7 = db7 + 0
+  dW8 = dW8 + 0; db8 = db8 + 0
+  dgamma1 = dgamma1 + 0; dbeta1 = dbeta1 + 0
+  dgamma2 = dgamma2 + 0; dbeta2 = dbeta2 + 0
+  dgamma3 = dgamma3 + 0; dbeta3 = dbeta3 + 0
+  dgamma4 = dgamma4 + 0; dbeta4 = dbeta4 + 0
+  dgamma5 = dgamma5 + 0; dbeta5 = dbeta5 + 0
 
   # Package gradients in same order as model parameters
-  gradients = list(dW1, db1, dgamma1, dbeta1, matrix(0,rows=nrow(dgamma1),cols=ncol(dgamma1)), matrix(0,rows=nrow(dbeta1),cols=ncol(dbeta1)),  # EMA grads are 0
-                   dW2, db2, dgamma2, dbeta2, matrix(0,rows=nrow(dgamma2),cols=ncol(dgamma2)), matrix(0,rows=nrow(dbeta2),cols=ncol(dbeta2)),
-                   dW3, db3, dgamma3, dbeta3, matrix(0,rows=nrow(dgamma3),cols=ncol(dgamma3)), matrix(0,rows=nrow(dbeta3),cols=ncol(dbeta3)),
-                   dW4, db4, dgamma4, dbeta4, matrix(0,rows=nrow(dgamma4),cols=ncol(dgamma4)), matrix(0,rows=nrow(dbeta4),cols=ncol(dbeta4)),
-                   dW5, db5, dgamma5, dbeta5, matrix(0,rows=nrow(dgamma5),cols=ncol(dgamma5)), matrix(0,rows=nrow(dbeta5),cols=ncol(dbeta5)),
+  # Create dense zero matrices for EMA gradients
+  zero_dgamma1 = matrix(0,rows=nrow(dgamma1),cols=ncol(dgamma1)) + 0
+  zero_dbeta1 = matrix(0,rows=nrow(dbeta1),cols=ncol(dbeta1)) + 0
+  zero_dgamma2 = matrix(0,rows=nrow(dgamma2),cols=ncol(dgamma2)) + 0
+  zero_dbeta2 = matrix(0,rows=nrow(dbeta2),cols=ncol(dbeta2)) + 0
+  zero_dgamma3 = matrix(0,rows=nrow(dgamma3),cols=ncol(dgamma3)) + 0
+  zero_dbeta3 = matrix(0,rows=nrow(dbeta3),cols=ncol(dbeta3)) + 0
+  zero_dgamma4 = matrix(0,rows=nrow(dgamma4),cols=ncol(dgamma4)) + 0
+  zero_dbeta4 = matrix(0,rows=nrow(dbeta4),cols=ncol(dbeta4)) + 0
+  zero_dgamma5 = matrix(0,rows=nrow(dgamma5),cols=ncol(dgamma5)) + 0
+  zero_dbeta5 = matrix(0,rows=nrow(dbeta5),cols=ncol(dbeta5)) + 0
+  
+  gradients = list(dW1, db1, dgamma1, dbeta1, zero_dgamma1, zero_dbeta1,  # EMA grads are 0
+                   dW2, db2, dgamma2, dbeta2, zero_dgamma2, zero_dbeta2,
+                   dW3, db3, dgamma3, dbeta3, zero_dgamma3, zero_dbeta3,
+                   dW4, db4, dgamma4, dbeta4, zero_dgamma4, zero_dbeta4,
+                   dW5, db5, dgamma5, dbeta5, zero_dgamma5, zero_dbeta5,
                    dW6, db6, dW7, db7, dW8, db8)
-  } else {
-    # TEMPORARY: Use approximate gradients based on loss to avoid sparse matrix issues
-    # This is a workaround until the sparse matrix null pointer issue is resolved
-    # The gradients are scaled based on the loss magnitude for more realistic updates
-    
-    N = nrow(dOut)
-    loss_scale = sum(abs(dOut)) / (N * ncol(dOut))  # Average magnitude of loss gradient
-    
-    gradients = list()
-    for (i in 1:length(model)) {
-      param = as.matrix(model[i])
-      # Create gradients proportional to parameter magnitude and loss
-      grad = rand(rows=nrow(param), cols=ncol(param), min=-1, max=1, seed=i+42)
-      grad = grad * loss_scale * 0.01  # Scale gradients appropriately
-      gradients = append(gradients, grad)
-    }
-    
-    # Dummy dX
-    dX = matrix(0, rows=N, cols=C*Hin*Win)
-  }
 }
 
 /*
