@@ -31,3 +31,32 @@ get_lr_with_warmup = function(double base_lr, int epoch, int iter, int total_epo
     }
 }
 
+get_weight_decay_with_polynomial = function(double base_lambda, int epoch, int iter, 
+                                           int total_epochs, int iters_per_epoch, 
+                                           int warmup_epochs, int decay_power)
+    return (double lambda) {
+    /*
+     * Compute weight decay coefficient with polynomial decay.
+     * 
+     * Similar to learning rate schedule but for weight decay:
+     * - Constant during warmup
+     * - Polynomial decay afterwards
+     */
+    
+    # Total number of iterations
+    total_iters = total_epochs * iters_per_epoch
+    warmup_iters = warmup_epochs * iters_per_epoch
+    current_iter = (epoch - 1) * iters_per_epoch + iter
+    
+    if (current_iter <= warmup_iters) {
+        # Constant weight decay during warmup
+        lambda = base_lambda
+    } else {
+        # Polynomial decay
+        decay_iters = total_iters - warmup_iters
+        decay_current = current_iter - warmup_iters
+        decay_factor = (1 - decay_current / decay_iters) ^ decay_power
+        lambda = base_lambda * decay_factor
+    }
+}
+

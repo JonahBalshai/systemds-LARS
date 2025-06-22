@@ -35,6 +35,8 @@
  * - Real backward pass instead of dummy gradients
  * - Proper integration with existing lars.dml and lars_util.dml
  * - Fixed learning rate scheduling using lars_util.dml
+ * - Added polynomial weight decay as described in the LARS paper
+ * - Integrated grouped convolutions and LRN layers
  */
 
 # CORRECTED: Import the new AlexNet implementation with LARS support
@@ -64,6 +66,7 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
    */
   
   print("=== CORRECTED: AlexNet-BN ImageNet Training with LARS ===")
+  print("With polynomial weight decay, grouped convolutions, and LRN layers")
   
   # Dataset parameters (ImageNet)
   C = 3          # RGB channels
@@ -97,14 +100,24 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
   print("- Scaled LR: " + (base_lr * batch_size / base_batch_size))
   print("- Epochs: " + epochs)
   print("- Warmup epochs: " + warmup_epochs)
-  print("- Weight decay: " + weight_decay)
+  print("- Base weight decay: " + weight_decay + " (with polynomial decay)")
   print("- Trust coefficient: " + trust_coeff)
   print("- Momentum: " + momentum)
+  print("- Polynomial decay power: " + decay_power)
   print("")
   
   # Load ImageNet data
   print("Loading ImageNet dataset...")
   [X_train, Y_train, X_val, Y_val] = load_imagenet_data(Hin, Win, num_classes)
+  
+  print("\nModel architecture:")
+  print("- Conv1: 96 filters 11x11 → ReLU → LRN → MaxPool")
+  print("- Conv2: 256 filters 5x5 (groups=2) → ReLU → LRN → MaxPool")
+  print("- Conv3: 384 filters 3x3 → ReLU")
+  print("- Conv4: 384 filters 3x3 (groups=2) → ReLU")
+  print("- Conv5: 256 filters 3x3 (groups=2) → ReLU → MaxPool")
+  print("- FC layers: 4096 → 4096 → " + num_classes)
+  print("")
   
   N_train = nrow(X_train)
   N_val = nrow(X_val)
@@ -151,6 +164,11 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
                                          iters_per_epoch, batch_size, 
                                          base_batch_size, warmup_epochs, decay_power)
       
+      # CORRECTED: Get weight decay with polynomial decay
+      current_weight_decay = lars_util::get_weight_decay_with_polynomial(
+          weight_decay, epoch, iter, epochs, iters_per_epoch, 
+          warmup_epochs, decay_power)
+      
       # Get batch
       beg = ((iter-1) * batch_size) %% N_train + 1
       end = min(N_train, beg + batch_size - 1)
@@ -174,8 +192,8 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
       model[29] = as.matrix(emas_upd[9])  # ema_mean5
       model[30] = as.matrix(emas_upd[10]) # ema_var5
       
-      # Compute loss and accuracy
-      batch_loss = alexnet::compute_loss(predictions, Y_batch, model, weight_decay)
+      # Compute loss and accuracy with current weight decay
+      batch_loss = alexnet::compute_loss(predictions, Y_batch, model, current_weight_decay)
       batch_acc = alexnet::compute_accuracy(predictions, Y_batch)
       epoch_loss = epoch_loss + batch_loss
       epoch_acc = epoch_acc + batch_acc
@@ -184,15 +202,16 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
       dprobs = cross_entropy_loss::backward(predictions, Y_batch)
       [dX, gradients] = alexnet::backward_with_bn(dprobs, cached_out, model, C, Hin, Win, 0.5)
       
-      # CORRECTED: Update with LARS using the proper algorithm
+      # CORRECTED: Update with LARS using the proper algorithm and current weight decay
       [model, optim_state] = alexnet::update_params_with_lars(
-          model, gradients, lr, momentum, weight_decay, trust_coeff, optim_state)
+          model, gradients, lr, momentum, current_weight_decay, trust_coeff, optim_state)
       
       # Print progress every 50 iterations
       if (iter %% 50 == 0 | iter == 1) {
         print("Epoch " + epoch + "/" + epochs + 
               ", Iter " + iter + "/" + iters_per_epoch + 
               ", LR: " + lr + 
+              ", WD: " + current_weight_decay +
               ", Loss: " + batch_loss + 
               ", Acc: " + batch_acc)
       }
@@ -507,6 +526,7 @@ quick_test = function() {
 # Main execution with options
 print("CORRECTED: AlexNet-BN ImageNet Training with LARS")
 print("Based on 'Large Batch Training of Convolutional Networks'")
+print("Now includes: Polynomial weight decay, Grouped convolutions, LRN layers")
 print("")
 
 # Option 1: Quick test to validate implementation

@@ -23,9 +23,17 @@
  * Layer-wise Adaptive Rate Scaling (LARS) optimizer.
  */
 
-update = function(matrix[double] X, matrix[double] dX, double lr, double mu, 
-                  matrix[double] v, double lambda, double trust_coeff)
-    return (matrix[double] X, matrix[double] v) {
+update = function(matrix[double] X, 
+                  matrix[double] dX, 
+                  double lr, 
+                  double mu, 
+                  matrix[double] v, 
+                  double lambda, 
+                  double trust_coeff,
+                  boolean skip_lars = FALSE)
+    return (matrix[double] X, matrix[double] v) 
+    
+{
   /*
    * Performs a LARS update with layer-wise adaptive learning rate.
    *
@@ -38,44 +46,54 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double mu,
    * L2 norm of the weights and the L2 norm of the gradients.
    *
    * Inputs:
-   *  - X: Parameters to update, of shape (any, any).
-   *  - dX: Gradient of the loss function w.r.t. X, of same shape as X.
-   *  - lr: Global learning rate.
-   *  - mu: Momentum coefficient.
-   *  - v: Velocity (momentum state), of same shape as X.
-   *  - lambda: L2 regularization strength (weight decay).
-   *  - trust_coeff: Trust coefficient for LARS (typically 0.001).
+   *  - X: Parameters to update, of shape (any, any)
+   *  - dX: Gradient of the loss function w.r.t. X, of same shape as X
+   *  - lr: Global learning rate
+   *  - mu: Momentum coefficient
+   *  - v: Velocity (momentum state), of same shape as X
+   *  - lambda: L2 regularization strength (weight decay)
+   *  - trust_coeff (η): Trust coefficient for LARS (typically 0.001)
+   *  - 
    *
    * Outputs:
    *  - X: Updated parameters X, of same shape as input X.
    *  - v: Updated velocity, of same shape as input v.
    */
-  # Add weight decay to gradient
-  dX_wd = dX + lambda * X
-  
-  # Compute L2 norms
-  X_norm = sqrt(sum(X^2))
-  dX_norm = sqrt(sum(dX^2))  # Use gradient norm WITHOUT weight decay for LARS computation
-  
-  # Compute local learning rate according to LARS paper
-  # The exact formula from the paper is:
-  # local_lr = trust_coeff * ||w|| / ||∇L(w)||
-  # where trust_coeff (η) is typically 0.001
-  epsilon = 1e-8
-  local_lr = trust_coeff * X_norm / (dX_norm + epsilon)
-  
-  # Apply global learning rate scaling
-  # The paper mentions that for bias and BN parameters, they skip LARS
-  effective_lr = lr * local_lr
-  
-  # For very small layers (like biases), skip LARS and use regular SGD
-  # This follows the paper's recommendation for bias terms
-  if (X_norm < 1e-3 | ncol(X) == 1) {  # Check for small params or bias vectors
-    effective_lr = lr  # Use global lr for small parameters (like biases)
+ 
+  # Detect very small tensors (bias / BN) if caller did not flag them | Paper's recommendation for bias terms
+  if (!skip_lars) {
+    skip_lars = (nrow(X)==1 | ncol(X)==1 | sqrt(sum(X^2)) < 1e-3)
   }
-  
-  # SGD with momentum update using the adaptive learning rate
-  # Note: We still use dX_wd (gradient with weight decay) for the actual update
+
+  #-----------------------------------------------------------
+  # 1.  Build gradient w/ weight-decay  (needed either way)
+  #-----------------------------------------------------------
+  matrix[double] dX_wd =
+    (skip_lars) ? dX                  # ← no decay for bias / BN
+                : dX + lambda * X     # ← standard weight-decay
+
+  #-----------------------------------------------------------
+  # 2.  Compute local LR  λ_l   (only if LARS is enabled)
+  #-----------------------------------------------------------
+  double effective_lr = lr        # default: plain SGD
+  if (!skip_lars) {
+    
+    # Compute L2 norms
+    double X_norm   = sqrt(sum(X ^ 2))
+    double dX_norm  = sqrt(sum(dX_wd ^ 2))         # <-- includes decay
+    double eps      = 1e-8
+
+    double local_lr = trust_coeff * X_norm / (dX_norm + eps)
+
+    # optional safety-clamp (helps early-epoch stability)
+    if (local_lr > 1.0)  local_lr = 1.0
+
+    effective_lr = lr * local_lr
+  }
+
+  #-----------------------------------------------------------
+  # 3.  SGD-with-momentum update
+  #-----------------------------------------------------------
   v = mu * v - effective_lr * dX_wd
   X = X + v
 }
