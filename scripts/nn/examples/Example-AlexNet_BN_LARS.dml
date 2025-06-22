@@ -262,7 +262,30 @@ load_imagenet_data = function(int Hin, int Win, int num_classes,
   if (data_source == "csv_chunked") {
     print("Loading ImageNet data from CSV chunks...")
     
+    # Memory validation before loading
+    D = 3 * Hin * Win
+    bytes_per_sample = D * 8  # 8 bytes per double
+    max_samples_safe = as.integer((max_memory_gb * 0.8 * 1024 * 1024 * 1024) / bytes_per_sample)  # Use 80% of limit
+    
+    print("Memory validation:")
+    print("- Image dimensions: " + Hin + "x" + Win + "x3 = " + D + " features")
+    print("- Bytes per sample: " + bytes_per_sample)
+    print("- Memory limit: " + max_memory_gb + " GB")
+    print("- Safe sample limit: " + max_samples_safe + " samples")
+    print("- Requested chunk size: " + chunk_size)
+    
+    if (chunk_size > max_samples_safe) {
+      print("WARNING: Chunk size (" + chunk_size + ") exceeds safe memory limit (" + max_samples_safe + ")")
+      recommended_chunk_size = max_samples_safe
+      print("RECOMMENDATION: Use chunk_size=" + recommended_chunk_size + " or increase max_memory_gb")
+      print("Proceeding with reduced chunk size for safety...")
+      chunk_size = recommended_chunk_size
+    } else {
+      print("✓ Chunk size within safe memory limits")
+    }
+    
     # Load pre-split CSV chunks directly
+    print("")
     print("Loading CSV chunk files:")
     print("- imagenet_data/train_chunk_001.csv")
     print("- imagenet_data/train_labels_001.csv")
@@ -274,6 +297,26 @@ load_imagenet_data = function(int Hin, int Win, int num_classes,
     X_val_chunk = read("imagenet_data/val_chunk_001.csv", format="csv", header=FALSE)
     Y_val_chunk = read("imagenet_data/val_labels_001.csv", format="csv", header=FALSE)
     
+    # Validate actual loaded data size
+    actual_train_samples = nrow(X_train_chunk)
+    actual_val_samples = nrow(X_val_chunk)
+    actual_features = ncol(X_train_chunk)
+    
+    total_memory_gb = ((actual_train_samples + actual_val_samples) * actual_features * 8) / (1024*1024*1024)
+    
+    print("")
+    print("Loaded data validation:")
+    print("- Actual training samples: " + actual_train_samples)
+    print("- Actual validation samples: " + actual_val_samples)
+    print("- Actual features: " + actual_features)
+    print("- Total memory usage: " + total_memory_gb + " GB")
+    
+    if (total_memory_gb > max_memory_gb) {
+      print("WARNING: Actual memory usage exceeds limit!")
+    } else {
+      print("✓ Memory usage within limits")
+    }
+    
     # Force dense and normalize
     X_train = X_train_chunk + 0
     Y_train = Y_train_chunk + 0
@@ -284,7 +327,8 @@ load_imagenet_data = function(int Hin, int Win, int num_classes,
     X_train = (X_train - 0.5) * 2.0
     X_val = (X_val - 0.5) * 2.0
     
-    print("CSV chunks loaded successfully:")
+    print("")
+    print("CSV chunks loaded and normalized successfully:")
     print("- Training samples: " + nrow(X_train))
     print("- Validation samples: " + nrow(X_val))
     print("- Feature dimension: " + ncol(X_train))
