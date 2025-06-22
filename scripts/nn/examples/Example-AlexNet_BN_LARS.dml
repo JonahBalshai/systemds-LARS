@@ -63,6 +63,26 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
    * - metrics: Training metrics [train_loss, train_acc, val_loss, val_acc] per epoch
    */
   
+  # Input validation
+  if (batch_size <= 0) {
+    print("ERROR: batch_size must be positive, got: " + batch_size)
+    stop("Invalid batch_size parameter")
+  }
+  if (batch_size > 32768) {
+    print("WARNING: Very large batch_size (" + batch_size + ") may cause memory issues")
+  }
+  if (epochs != -1 & epochs <= 0) {
+    print("ERROR: epochs must be positive or -1 for auto, got: " + epochs)
+    stop("Invalid epochs parameter")
+  }
+  if (epochs > 1000) {
+    print("WARNING: Very large epochs (" + epochs + ") will take very long to train")
+  }
+  if (base_lr != -1.0 & (base_lr <= 0.0 | base_lr > 10.0)) {
+    print("ERROR: base_lr must be in (0, 10] or -1 for auto, got: " + base_lr)
+    stop("Invalid base_lr parameter")
+  }
+  
   print("=== CORRECTED: AlexNet-BN ImageNet Training with LARS ===")
   
   # Dataset parameters (ImageNet)
@@ -246,6 +266,33 @@ load_imagenet_data = function(int Hin, int Win, int num_classes,
    * - chunk_size: Samples per chunk (default 10000)
    * - max_memory_gb: Memory limit in GB (default 8.0)
    */
+  
+  # Input validation
+  if (Hin <= 0 | Win <= 0) {
+    print("ERROR: Image dimensions must be positive, got: " + Hin + "x" + Win)
+    stop("Invalid image dimensions")
+  }
+  if (Hin != 224 | Win != 224) {
+    print("WARNING: Non-standard ImageNet dimensions (" + Hin + "x" + Win + "), expected 224x224")
+  }
+  if (num_classes <= 0) {
+    print("ERROR: num_classes must be positive, got: " + num_classes)
+    stop("Invalid num_classes parameter")
+  }
+  if (num_classes > 10000) {
+    print("WARNING: Very large num_classes (" + num_classes + "), ImageNet typically uses 1000")
+  }
+  if (chunk_size <= 0) {
+    print("ERROR: chunk_size must be positive, got: " + chunk_size)
+    stop("Invalid chunk_size parameter")
+  }
+  if (max_memory_gb <= 0.0) {
+    print("ERROR: max_memory_gb must be positive, got: " + max_memory_gb)
+    stop("Invalid max_memory_gb parameter")
+  }
+  if (max_memory_gb > 1024.0) {
+    print("WARNING: Very large memory limit (" + max_memory_gb + " GB), ensure system has sufficient RAM")
+  }
   
   # Choose data source: "csv_chunked", "binary", "csv", or "dummy"
   data_source = "csv_chunked"  # Use CSV chunked loading for large datasets
