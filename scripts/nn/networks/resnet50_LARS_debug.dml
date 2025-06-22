@@ -50,19 +50,19 @@ source("nn/layers/softmax.dml") as softmax
  */
 
 forward = function(matrix[double] X, int Hin, int Win,
-                            list[unknown] model, string mode,
-                            list[unknown] ema_means_vars)
+                   list[unknown] model, string mode,
+                   list[unknown] ema_means_vars)
     return (matrix[double] out, list[unknown] ema_means_vars_upd,
             list[unknown] cached_out, list[unknown] cached_means_vars) {
-    /*
+  /*
    * Forward pass of ResNet50.
    * 
    * Uses the bottleneck block type with layer sizes [3, 4, 6, 3]
    * as specified in the original ResNet50 paper.
-     */
+   */
   
-    layer_sizes = list(3, 4, 6, 3)
-    block_type = "bottleneck"
+  layer_sizes = list(3, 4, 6, 3)
+  block_type = "bottleneck"
   
   [out, ema_means_vars_upd, cached_out, cached_means_vars] = resnet::resnet_forward(
       X, Hin, Win, block_type, layer_sizes, model, mode, ema_means_vars)
@@ -71,21 +71,29 @@ forward = function(matrix[double] X, int Hin, int Win,
 backward = function(matrix[double] dOut, list[unknown] cached_out,
                     list[unknown] model, list[unknown] cached_means_vars)
     return (matrix[double] dX, list[unknown] gradients) {
-    /*
+  /*
    * Backward pass of ResNet50.
    * 
    * Computes gradients for all parameters using the cached values
    * from the forward pass.
    */
   
+  print("DEBUG: Starting ResNet50 backward pass")
+  print("DEBUG: dOut shape: " + nrow(dOut) + "x" + ncol(dOut))
+  
   # Ensure dOut is dense to avoid sparse matrix issues
   dOut = matrix(dOut, rows=nrow(dOut), cols=ncol(dOut))
   
-    layer_sizes = list(3, 4, 6, 3)
-    block_type = "bottleneck"
+  layer_sizes = list(3, 4, 6, 3)
+  block_type = "bottleneck"
   
+  print("DEBUG: Calling resnet::resnet_backward")
   [dX, gradients] = resnet::resnet_backward(
       dOut, cached_out, block_type, layer_sizes, model, cached_means_vars)
+  
+  print("DEBUG: Backward pass completed successfully!")
+  print("DEBUG: dX shape: " + nrow(dX) + "x" + ncol(dX))
+  print("DEBUG: Number of gradient groups: " + length(gradients))
 }
 
 /*
@@ -94,20 +102,20 @@ backward = function(matrix[double] dOut, list[unknown] cached_out,
 
 init = function(int classes, int seed)
     return (list[unknown] model, list[unknown] emas) {
-    /*
+  /*
    * Initialize ResNet50 model parameters.
-     *
-     * Inputs:
+   * 
+   * Inputs:
    * - classes: Number of output classes
    * - seed: Random seed for initialization
-     *
-     * Outputs:
+   * 
+   * Outputs:
    * - model: List of model parameters
    * - emas: List of exponential moving averages for batch normalization
-     */
+   */
   
-    layer_sizes = list(3, 4, 6, 3)
-    [model, emas] = resnet::init(classes, "bottleneck", layer_sizes, seed)
+  layer_sizes = list(3, 4, 6, 3)
+  [model, emas] = resnet::init(classes, "bottleneck", layer_sizes, seed)
 }
 
 /*
@@ -116,9 +124,9 @@ init = function(int classes, int seed)
 
 init_lars_optim_params = function(list[unknown] model)
     return (list[unknown] optim_state) {
-    /*
+  /*
    * Initialize LARS optimizer momentum state for each parameter.
-     *
+   * 
    * This properly initializes momentum states for all parameters
    * in the nested ResNet50 structure.
    */
@@ -140,27 +148,33 @@ update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
                                    double global_lr, double momentum, double weight_decay,
                                    double trust_coeff, list[unknown] optim_state)
     return (list[unknown] model_upd, list[unknown] optim_state_upd) {
-    /*
+  /*
    * Update model parameters with LARS optimizer.
-     *
+   * 
    * This function properly handles the nested ResNet50 parameter structure
    * by flattening parameters, applying LARS updates, and reconstructing
    * the nested structure.
-     */
-    
-  # Flatten nested structures for LARS updates
-    flat_model = flatten_model_params(model)
-    flat_grads = flatten_model_params(gradients)
-    
-    # Apply LARS update to each parameter
-    flat_model_upd = list()
-    flat_optim_upd = list()
+   */
   
-    for (i in 1:length(flat_model)) {
-        param = as.matrix(flat_model[i])
-        grad = as.matrix(flat_grads[i])
+  print("DEBUG: Starting LARS update")
+  print("DEBUG: Learning rate: " + global_lr + ", Momentum: " + momentum)
+  print("DEBUG: Weight decay: " + weight_decay + ", Trust coeff: " + trust_coeff)
+  
+  # Flatten nested structures for LARS updates
+  flat_model = flatten_model_params(model)
+  flat_grads = flatten_model_params(gradients)
+  
+  print("DEBUG: Flattened " + length(flat_model) + " parameters")
+  
+  # Apply LARS update to each parameter
+  flat_model_upd = list()
+  flat_optim_upd = list()
+  
+  for (i in 1:length(flat_model)) {
+    param = as.matrix(flat_model[i])
+    grad = as.matrix(flat_grads[i])
     momentum_state = as.matrix(optim_state[i])
-        
+    
     # Ensure gradients are dense
     grad = matrix(grad, rows=nrow(grad), cols=ncol(grad))
     
@@ -168,12 +182,12 @@ update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
     [param_upd, momentum_state_upd] = lars::update(
         param, grad, global_lr, momentum, momentum_state, weight_decay, trust_coeff)
     
-        flat_model_upd = append(flat_model_upd, param_upd)
-        flat_optim_upd = append(flat_optim_upd, momentum_state_upd)
-    }
-    
+    flat_model_upd = append(flat_model_upd, param_upd)
+    flat_optim_upd = append(flat_optim_upd, momentum_state_upd)
+  }
+  
   # Reconstruct nested model structure
-    model_upd = reconstruct_model_params(flat_model_upd, model)
+  model_upd = reconstruct_model_params(flat_model_upd, model)
   optim_state_upd = flat_optim_upd  # Keep optimizer state flat for efficiency
 }
 
@@ -183,75 +197,75 @@ update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
 
 flatten_model_params = function(list[unknown] nested_params)
     return (list[unknown] flat_params) {
-    /*
-     * Flattens the nested ResNet50 parameter structure into a flat list.
+  /*
+   * Flattens the nested ResNet50 parameter structure into a flat list.
    * 
    * ResNet50 structure:
    * - Elements 1-3: Conv1 weights, BN1 weights, BN1 bias
    * - Elements 4-7: Residual layers (nested lists)
    * - Elements 8-9: FC weights and bias
-     */
+   */
   
-    flat_params = list()
-    
-    # First 3 parameters (conv1 + bn1)
-    for (i in 1:3) {
-        flat_params = append(flat_params, nested_params[i])
-    }
-    
-    # Residual layers 4-7 (nested structure)
+  flat_params = list()
+  
+  # First 3 parameters (conv1 + bn1)
+  for (i in 1:3) {
+    flat_params = append(flat_params, nested_params[i])
+  }
+  
+  # Residual layers 4-7 (nested structure)
   for (layer_idx in 4:7) {
     layer_params = as.list(nested_params[layer_idx])
     for (block_idx in 1:length(layer_params)) {
       block_params = as.list(layer_params[block_idx])
       for (param_idx in 1:length(block_params)) {
         flat_params = append(flat_params, block_params[param_idx])
-            }
-        }
+      }
     }
-    
-    # Final FC layer (weights + bias)
-    flat_params = append(flat_params, nested_params[8])
-    flat_params = append(flat_params, nested_params[9])
+  }
+  
+  # Final FC layer (weights + bias)
+  flat_params = append(flat_params, nested_params[8])
+  flat_params = append(flat_params, nested_params[9])
 }
 
 reconstruct_model_params = function(list[unknown] flat_params, list[unknown] structure_template)
     return (list[unknown] nested_params) {
-    /*
-     * Reconstructs the nested ResNet50 parameter structure from flat list.
+  /*
+   * Reconstructs the nested ResNet50 parameter structure from flat list.
    * Uses the structure template to maintain the correct nesting.
-     */
+   */
   
-    nested_params = list()
-    flat_idx = 1
-    
-    # First 3 parameters (conv1 + bn1)
-    for (i in 1:3) {
-        nested_params = append(nested_params, flat_params[flat_idx])
-        flat_idx = flat_idx + 1
-    }
-    
-    # Residual layers 4-7 (nested structure)
+  nested_params = list()
+  flat_idx = 1
+  
+  # First 3 parameters (conv1 + bn1)
+  for (i in 1:3) {
+    nested_params = append(nested_params, flat_params[flat_idx])
+    flat_idx = flat_idx + 1
+  }
+  
+  # Residual layers 4-7 (nested structure)
   for (layer_idx in 4:7) {
     layer_template = as.list(structure_template[layer_idx])
-        layer_params = list()
-        
+    layer_params = list()
+    
     for (block_idx in 1:length(layer_template)) {
       block_template = as.list(layer_template[block_idx])
-            block_params = list()
-            
+      block_params = list()
+      
       for (param_idx in 1:length(block_template)) {
-                block_params = append(block_params, flat_params[flat_idx])
-                flat_idx = flat_idx + 1
-            }
-            layer_params = append(layer_params, block_params)
-        }
-        nested_params = append(nested_params, layer_params)
+        block_params = append(block_params, flat_params[flat_idx])
+        flat_idx = flat_idx + 1
+      }
+      layer_params = append(layer_params, block_params)
     }
-    
-    # Final FC layer (weights + bias)
-    nested_params = append(nested_params, flat_params[flat_idx])
-    nested_params = append(nested_params, flat_params[flat_idx + 1])
+    nested_params = append(nested_params, layer_params)
+  }
+  
+  # Final FC layer (weights + bias)
+  nested_params = append(nested_params, flat_params[flat_idx])
+  nested_params = append(nested_params, flat_params[flat_idx + 1])
 }
 
 /*
@@ -260,10 +274,10 @@ reconstruct_model_params = function(list[unknown] flat_params, list[unknown] str
 
 get_lars_hyperparams = function(int batch_size, boolean use_bn)
     return (double base_lr, int warmup_epochs, int total_epochs) {
-    /*
+  /*
    * Get recommended LARS hyperparameters for ResNet50 based on batch size.
    * Based on Table 4 from the LARS paper.
-     */
+   */
   
   # ResNet50 uses batch normalization by default
   if (batch_size <= 256) {
@@ -276,7 +290,7 @@ get_lars_hyperparams = function(int batch_size, boolean use_bn)
     total_epochs = 90
   } else if (batch_size <= 8192) {
     base_lr = 0.1  # Will be scaled to ~3.2
-        warmup_epochs = 10
+    warmup_epochs = 10
     total_epochs = 90
   } else if (batch_size <= 16384) {
     base_lr = 0.1  # Will be scaled to ~6.4
@@ -294,10 +308,10 @@ get_lars_hyperparams = function(int batch_size, boolean use_bn)
  */
 
 compute_loss = function(matrix[double] predictions, matrix[double] targets, 
-                       list[unknown] model, double weight_decay)
+                        list[unknown] model, double weight_decay)
     return (double loss) {
-    /*
-     * Compute cross-entropy loss with L2 regularization for ResNet50.
+  /*
+   * Compute cross-entropy loss with L2 regularization for ResNet50.
     * Note: predictions should be raw logits, not probabilities
     */
    
@@ -306,68 +320,68 @@ compute_loss = function(matrix[double] predictions, matrix[double] targets,
    predictions_stable = predictions - rowMaxs(predictions)
    probs = softmax::forward(predictions_stable)
    data_loss = cross_entropy_loss::forward(probs, targets)
-    
-    # Add L2 regularization for all weight parameters
-    reg_loss = 0
-    flat_model = flatten_model_params(model)
-    
-   # Apply regularization to convolutional and FC weights only
-   # Skip biases, BN parameters
-    for (i in 1:length(flat_model)) {
-        param = as.matrix(flat_model[i])
-     # Only regularize if it's a weight matrix (not bias or BN param)
-        if (ncol(param) > 1 & nrow(param) > 1) {
-            reg_loss = reg_loss + l2_reg::forward(param, 1)
-        }
+  
+  # Add L2 regularization for all weight parameters
+  reg_loss = 0
+  flat_model = flatten_model_params(model)
+  
+  # Apply regularization to convolutional and FC weights only
+  # Skip biases, BN parameters
+  for (i in 1:length(flat_model)) {
+    param = as.matrix(flat_model[i])
+    # Only regularize if it's a weight matrix (not bias or BN param)
+    if (ncol(param) > 1 & nrow(param) > 1) {
+      reg_loss = reg_loss + l2_reg::forward(param, 1)
     }
-    
-    loss = data_loss + weight_decay * reg_loss
+  }
+  
+  loss = data_loss + weight_decay * reg_loss
 }
 
 compute_accuracy = function(matrix[double] predictions, matrix[double] targets)
     return (double accuracy) {
-    /*
-     * Compute classification accuracy.
+  /*
+   * Compute classification accuracy.
     * Note: predictions can be either logits or probabilities,
     * as argmax is invariant to monotonic transformations
-     */
-   
-    pred_labels = rowIndexMax(predictions)
-    true_labels = rowIndexMax(targets)
-    accuracy = mean(pred_labels == true_labels)
+   */
+  
+  pred_labels = rowIndexMax(predictions)
+  true_labels = rowIndexMax(targets)
+  accuracy = mean(pred_labels == true_labels)
 }
 
 evaluate = function(matrix[double] X, matrix[double] Y, int Hin, int Win,
-                   list[unknown] model, list[unknown] emas, int batch_size)
+                    list[unknown] model, list[unknown] emas, int batch_size)
     return (double loss, double accuracy) {
-    /*
-     * Evaluate ResNet50 model on a dataset.
-     */
+  /*
+   * Evaluate ResNet50 model on a dataset.
+   */
   
-    N = nrow(X)
-    total_loss = 0
-    total_acc = 0
-    num_batches = ceil(N / batch_size)
+  N = nrow(X)
+  total_loss = 0
+  total_acc = 0
+  num_batches = ceil(N / batch_size)
+  
+  for (i in 1:num_batches) {
+    beg = ((i-1) * batch_size) %% N + 1
+    end = min(N, beg + batch_size - 1)
+    X_batch = X[beg:end,]
+    Y_batch = Y[beg:end,]
     
-    for (i in 1:num_batches) {
-        beg = ((i-1) * batch_size) %% N + 1
-        end = min(N, beg + batch_size - 1)
-        X_batch = X[beg:end,]
-        Y_batch = Y[beg:end,]
-        
-        # Forward pass in test mode
-        [predictions, emas_upd, cached_out, cached_means_vars] = forward(
-            X_batch, Hin, Win, model, "test", emas)
-        
-        batch_loss = compute_loss(predictions, Y_batch, model, 0.0)
-        batch_acc = compute_accuracy(predictions, Y_batch)
-        
-        total_loss = total_loss + batch_loss
-        total_acc = total_acc + batch_acc
-    }
+    # Forward pass in test mode
+    [predictions, emas_upd, cached_out, cached_means_vars] = forward(
+        X_batch, Hin, Win, model, "test", emas)
     
-    loss = total_loss / num_batches
-    accuracy = total_acc / num_batches
+    batch_loss = compute_loss(predictions, Y_batch, model, 0.0)
+    batch_acc = compute_accuracy(predictions, Y_batch)
+    
+    total_loss = total_loss + batch_loss
+    total_acc = total_acc + batch_acc
+  }
+  
+  loss = total_loss / num_batches
+  accuracy = total_acc / num_batches
 }
 
 /*
