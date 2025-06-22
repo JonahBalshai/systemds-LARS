@@ -161,18 +161,9 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
       [predictions, cached_out, emas_upd] = alexnet::forward_with_bn(
           X_batch, C, Hin, Win, model, "train", 0.5)
       
-      # CORRECTED: Update exponential moving averages properly
-      # EMAs are stored at specific indices in the model
-      model[5] = as.matrix(emas_upd[1])   # ema_mean1
-      model[6] = as.matrix(emas_upd[2])   # ema_var1
-      model[11] = as.matrix(emas_upd[3])  # ema_mean2
-      model[12] = as.matrix(emas_upd[4])  # ema_var2
-      model[17] = as.matrix(emas_upd[5])  # ema_mean3
-      model[18] = as.matrix(emas_upd[6])  # ema_var3
-      model[23] = as.matrix(emas_upd[7])  # ema_mean4
-      model[24] = as.matrix(emas_upd[8])  # ema_var4
-      model[29] = as.matrix(emas_upd[9])  # ema_mean5
-      model[30] = as.matrix(emas_upd[10]) # ema_var5
+      # IMPROVED: Update exponential moving averages using structured indexing
+      # This replaces fragile hardcoded indices with maintainable mapping
+      model = update_model_emas(model, emas_upd)
       
       # Compute loss and accuracy
       batch_loss = alexnet::compute_loss(predictions, Y_batch, model, weight_decay)
@@ -464,6 +455,62 @@ load_imagenet_data = function(int Hin, int Win, int num_classes,
   print("X_train density: " + (sum(X_train != 0) / (nrow(X_train) * ncol(X_train))))
   print("Y_train density: " + (sum(Y_train != 0) / (nrow(Y_train) * ncol(Y_train))))
   print("")
+}
+
+# EMA index mapping for AlexNet-BN model structure
+get_ema_indices = function() 
+    return (matrix[double] ema_mean_indices, matrix[double] ema_var_indices) {
+  /*
+   * Returns the model indices for EMA parameters in AlexNet-BN
+   * This centralizes the model structure knowledge and prevents fragile hardcoded indices
+   * 
+   * AlexNet-BN has 5 batch normalization layers, each with mean and variance EMAs:
+   * Layer 1: indices 5 (mean), 6 (var)
+   * Layer 2: indices 11 (mean), 12 (var)  
+   * Layer 3: indices 17 (mean), 18 (var)
+   * Layer 4: indices 23 (mean), 24 (var)
+   * Layer 5: indices 29 (mean), 30 (var)
+   */
+  
+  # Mean EMA indices for each BN layer
+  ema_mean_indices = matrix("5 11 17 23 29", rows=1, cols=5)
+  
+  # Variance EMA indices for each BN layer  
+  ema_var_indices = matrix("6 12 18 24 30", rows=1, cols=5)
+}
+
+# Update EMAs in model using structured indexing
+update_model_emas = function(list[unknown] model, list[unknown] emas_upd)
+    return (list[unknown] updated_model) {
+  /*
+   * Update EMA parameters in model using proper index mapping
+   * This replaces fragile hardcoded index assignments
+   * 
+   * Inputs:
+   * - model: Current model parameters
+   * - emas_upd: Updated EMA values [mean1, var1, mean2, var2, ..., mean5, var5]
+   * 
+   * Returns:
+   * - updated_model: Model with EMAs updated
+   */
+  
+  # Get structured indices
+  [ema_mean_indices, ema_var_indices] = get_ema_indices()
+  
+  # Update model with new EMAs using proper indexing
+  updated_model = model
+  
+  for (layer in 1:5) {
+    mean_idx = as.scalar(ema_mean_indices[1, layer])
+    var_idx = as.scalar(ema_var_indices[1, layer])
+    
+    # emas_upd contains [mean1, var1, mean2, var2, mean3, var3, mean4, var4, mean5, var5]
+    ema_idx_mean = (layer - 1) * 2 + 1  # 1, 3, 5, 7, 9
+    ema_idx_var = (layer - 1) * 2 + 2   # 2, 4, 6, 8, 10
+    
+    updated_model[mean_idx] = as.matrix(emas_upd[ema_idx_mean])
+    updated_model[var_idx] = as.matrix(emas_upd[ema_idx_var])
+  }
 }
 
 # Checkpoint saving
