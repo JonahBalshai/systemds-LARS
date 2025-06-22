@@ -447,7 +447,7 @@ init_lars_optim_params = function(int classes)
      *     directly passed to the update parameter function.
      */
     layer_sizes = list(3, 8, 36, 3)
-    params = util::init_optim("lars", classes, "basic", layer_sizes)
+    params = util::init_optim("lars", classes, "bottleneck", layer_sizes)
 }
 
 update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
@@ -476,6 +476,6 @@ update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
      */
     layer_sizes = list(3, 8, 36, 3)
     hyper_params = list(lr, mu, weight_decay, trust_coeff)
-    [optim_state_upd, model_upd] = util::update_params("lars", optim_state, hyper_params, gradients, model, "basic", 
+    [optim_state_upd, model_upd] = util::update_params("lars", optim_state, hyper_params, gradients, model, "bottleneck", 
         layer_sizes)
 }
