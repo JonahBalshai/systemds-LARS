@@ -160,10 +160,8 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     epoch_loss = 0
     epoch_acc = 0
     
-    # IMPROVEMENT: Add data shuffling for better training
-    # permutation = sample(N_train, N_train, FALSE)
-    # X_train = X_train[permutation,]
-    # Y_train = Y_train[permutation,]
+    # NOTE: Data shuffling will be implemented in data loading phase
+    # Sequential batching used for now - shuffling to be added to Python data prep script
     
     for (iter in 1:iters_per_epoch) {
       # CORRECTED: Get learning rate with warmup and decay using lars_util
