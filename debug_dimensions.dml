@@ -1,0 +1,113 @@
+# Debug script to isolate the dimension mismatch in grouped convolution
+# This script tests the dimension flow step by step
+
+source("scripts/nn/layers/conv2d_builtin.dml") as conv2d
+source("scripts/nn/layers/conv2d_grouped.dml") as conv2d_grouped
+source("scripts/nn/layers/max_pool2d_builtin.dml") as max_pool2d
+
+print("=== Debugging Grouped Convolution Dimensions ===")
+print("")
+
+# Test parameters matching AlexNet architecture
+C = 3        # Input channels (RGB)
+Hin = 224    # Input height
+Win = 224    # Input width
+batch_size = 8
+
+print("Input specifications:")
+print("- Channels: " + C)
+print("- Height: " + Hin)
+print("- Width: " + Win)
+print("- Batch size: " + batch_size)
+print("")
+
+# Create test input
+X = rand(rows=batch_size, cols=C*Hin*Win, min=-1, max=1, seed=42) + 0
+
+print("Step 1: Conv1 (11x11, stride=4, 96 filters)")
+print("Expected output channels: 96")
+
+# Conv1: 96 filters, 11x11, stride 4
+[W1, b1] = conv2d::init(96, C, 11, 11, 42)
+print("W1 shape: " + nrow(W1) + " x " + ncol(W1))
+print("Expected W1 shape: 96 x " + (C * 11 * 11))
+
+[outc1, Houtc1, Woutc1] = conv2d::forward(X, W1, b1, C, Hin, Win, 11, 11, 4, 4, 0, 0)
+print("Conv1 output shape: " + nrow(outc1) + " x " + ncol(outc1))
+print("Conv1 output spatial: " + Houtc1 + " x " + Woutc1)
+print("Expected conv1 output: " + batch_size + " x " + (96 * Houtc1 * Woutc1))
+print("")
+
+# MaxPool1: 3x3, stride 2
+print("Step 2: MaxPool1 (3x3, stride=2)")
+[outp1, Houtp1, Woutp1] = max_pool2d::forward(outc1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
+print("MaxPool1 output shape: " + nrow(outp1) + " x " + ncol(outp1))
+print("MaxPool1 output spatial: " + Houtp1 + " x " + Woutp1)
+print("Expected pool output channels: 96")
+print("")
+
+# Now the problematic Conv2
+print("Step 3: Conv2 Grouped (5x5, stride=1, pad=2, 256 filters, groups=2)")
+print("Input channels: 96")
+print("Output channels: 256")
+print("Groups: 2")
+print("Expected weight shape: 256 x " + (96/2 * 5 * 5) + " = 256 x " + (48 * 25) + " = 256 x 1200")
+
+# Initialize Conv2 weights
+[W2, b2] = conv2d_grouped::init(256, 96, 5, 5, 2, 42)
+print("W2 actual shape: " + nrow(W2) + " x " + ncol(W2))
+print("b2 shape: " + nrow(b2) + " x " + ncol(b2))
+
+# Check if dimensions match expectations
+expected_w2_cols = (96/2) * 5 * 5
+actual_w2_cols = ncol(W2)
+print("")
+print("=== DIMENSION ANALYSIS ===")
+print("Expected W2 columns: " + expected_w2_cols + " (96/2 * 5 * 5)")
+print("Actual W2 columns: " + actual_w2_cols)
+
+if (expected_w2_cols == actual_w2_cols) {
+    print("✓ Weight initialization is CORRECT")
+} else {
+    print("✗ Weight initialization is WRONG!")
+    print("Ratio: " + (actual_w2_cols / expected_w2_cols))
+}
+print("")
+
+# Test the grouped convolution forward pass
+print("Step 4: Testing grouped convolution forward pass")
+print("Running grouped convolution forward pass...")
+
+# Print debug info before attempting forward pass
+print("")
+print("=== DEBUG INFO BEFORE FORWARD PASS ===")
+print("Input to Conv2 (outp1) shape: " + nrow(outp1) + " x " + ncol(outp1))
+print("Expected input format: " + batch_size + " x " + (96 * Houtp1 * Woutp1))
+print("Actual input columns: " + ncol(outp1))
+print("Expected input columns: " + (96 * Houtp1 * Woutp1))
+
+# Calculate what the grouped conv expects
+C_per_group = 96 / 2  # 48
+expected_input_per_group = C_per_group * Houtp1 * Woutp1
+print("")
+print("Grouped convolution expectations:")
+print("- Groups: 2")
+print("- Channels per group: " + C_per_group)
+print("- Input spatial size: " + Houtp1 + " x " + Woutp1)
+print("- Expected input cols per group: " + expected_input_per_group)
+print("- Total expected input cols: " + (96 * Houtp1 * Woutp1))
+print("")
+
+# Now attempt the forward pass
+print("Attempting grouped convolution forward pass...")
+[outc2, Houtc2, Woutc2] = conv2d_grouped::forward(outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2, 2)
+print("✓ Grouped convolution succeeded!")
+print("Conv2 output shape: " + nrow(outc2) + " x " + ncol(outc2))
+print("Conv2 output spatial: " + Houtc2 + " x " + Woutc2)
+
+print("")
+print("=== SUMMARY ===")
+print("If error occurred, check:")
+print("1. Weight matrix W2 dimensions")
+print("2. Input matrix outp1 dimensions") 
+print("3. Grouped convolution parameter expectations")

@@ -1,0 +1,122 @@
+# Debug script to test the batch normalization version specifically
+# This isolates the forward_with_bn function to find the dimension issue
+
+source("scripts/nn/networks/alexnet_LARS.dml") as alexnet
+
+print("=== Debugging AlexNet-BN Forward Pass ===")
+print("")
+
+# Test parameters
+C = 3
+Hin = 224
+Win = 224
+num_classes = 10
+batch_size = 8
+seed = 42
+
+print("Initializing AlexNet-BN model...")
+[model, emas] = alexnet::init_with_bn(C, Hin, Win, num_classes, seed)
+print("Model initialized with " + length(model) + " parameters")
+print("")
+
+# Create test input
+X = rand(rows=batch_size, cols=C*Hin*Win, min=-1, max=1, seed=42) + 0
+print("Input shape: " + nrow(X) + " x " + ncol(X))
+print("")
+
+# Check individual model parameters
+print("=== Model Parameter Dimensions ===")
+param_names = list("W1", "b1", "gamma1", "beta1", "ema_mean1", "ema_var1",
+                   "W2", "b2", "gamma2", "beta2", "ema_mean2", "ema_var2", 
+                   "W3", "b3", "gamma3", "beta3", "ema_mean3", "ema_var3",
+                   "W4", "b4", "gamma4", "beta4", "ema_mean4", "ema_var4",
+                   "W5", "b5", "gamma5", "beta5", "ema_mean5", "ema_var5",
+                   "W6", "b6", "W7", "b7", "W8", "b8")
+
+for (i in 1:min(12, length(model))) {  # Just check first 12 parameters (through Conv2)
+    param = as.matrix(model[i])
+    param_name = as.scalar(param_names[i])
+    print(param_name + " shape: " + nrow(param) + " x " + ncol(param))
+}
+print("")
+
+# Test forward pass with detailed error reporting
+print("Testing forward_with_bn...")
+print("Attempting forward_with_bn...")
+[predictions, cached_out, emas_upd] = alexnet::forward_with_bn(X, C, Hin, Win, model, "train", 0.5)
+print("✓ Forward pass succeeded!")
+print("Output shape: " + nrow(predictions) + " x " + ncol(predictions))
+
+# Since we can't catch errors in SystemDS, let's manually step through the forward pass
+print("=== Manual Step-by-Step Forward Pass ===")
+
+# Extract parameters manually
+W1 = as.matrix(model[1]); b1 = as.matrix(model[2])
+gamma1 = as.matrix(model[3]); beta1 = as.matrix(model[4])
+ema_mean1 = as.matrix(model[5]); ema_var1 = as.matrix(model[6])
+
+W2 = as.matrix(model[7]); b2 = as.matrix(model[8])
+gamma2 = as.matrix(model[9]); beta2 = as.matrix(model[10])
+ema_mean2 = as.matrix(model[11]); ema_var2 = as.matrix(model[12])
+
+print("Extracted parameters:")
+print("W1: " + nrow(W1) + " x " + ncol(W1))
+print("W2: " + nrow(W2) + " x " + ncol(W2))
+print("gamma2: " + nrow(gamma2) + " x " + ncol(gamma2))
+print("")
+
+# Step 1: Conv1 + BN + ReLU + MaxPool
+source("scripts/nn/layers/conv2d_builtin.dml") as conv2d
+source("scripts/nn/layers/batch_norm2d.dml") as batch_norm2d
+source("scripts/nn/layers/relu.dml") as relu
+source("scripts/nn/layers/max_pool2d_builtin.dml") as max_pool2d
+source("scripts/nn/layers/conv2d_grouped.dml") as conv2d_grouped
+
+print("Step 1: Conv1...")
+[outc1, Houtc1, Woutc1] = conv2d::forward(X, W1, b1, C, Hin, Win, 11, 11, 4, 4, 0, 0)
+print("Conv1 output: " + nrow(outc1) + " x " + ncol(outc1) + " (spatial: " + Houtc1 + "x" + Woutc1 + ")")
+
+print("Step 2: BN1...")
+[outbn1, ema_mean1_upd, ema_var1_upd, cache_mean1, cache_inv_var1] = batch_norm2d::forward(outc1, gamma1, beta1, 96, Houtc1, Woutc1, "train", ema_mean1, ema_var1, 0.99, 1e-5)
+print("BN1 output: " + nrow(outbn1) + " x " + ncol(outbn1))
+
+print("Step 3: ReLU1...")
+outr1 = relu::forward(outbn1)
+print("ReLU1 output: " + nrow(outr1) + " x " + ncol(outr1))
+
+print("Step 4: MaxPool1...")
+[outp1, Houtp1, Woutp1] = max_pool2d::forward(outr1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
+print("MaxPool1 output: " + nrow(outp1) + " x " + ncol(outp1) + " (spatial: " + Houtp1 + "x" + Woutp1 + ")")
+print("")
+
+# This is where the error might occur - Conv2 grouped
+print("Step 5: Conv2 Grouped (THE CRITICAL STEP)...")
+print("Input to Conv2: " + nrow(outp1) + " x " + ncol(outp1))
+print("Expected channels in: 96")
+print("Expected channels out: 256") 
+print("W2 shape: " + nrow(W2) + " x " + ncol(W2))
+print("Expected W2 shape: 256 x " + (96/2 * 5 * 5))
+
+# Let's see what the error message is by running the actual forward
+print("Attempting Conv2 grouped forward pass...")
+[outc2, Houtc2, Woutc2] = conv2d_grouped::forward(outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2, 2)
+print("✓ Conv2 succeeded!")
+print("Conv2 output: " + nrow(outc2) + " x " + ncol(outc2) + " (spatial: " + Houtc2 + "x" + Woutc2 + ")")
+print("")
+
+# If we got here, Conv2 worked. Let's check BN2
+print("Step 6: BN2...")
+print("gamma2 shape: " + nrow(gamma2) + " x " + ncol(gamma2))
+print("Expected gamma2 shape: 256 x 1")
+print("outc2 channels should be: 256")
+print("BN2 expecting: 256 channels")
+
+# This is where the mismatch might be
+[outbn2, ema_mean2_upd, ema_var2_upd, cache_mean2, cache_inv_var2] = batch_norm2d::forward(outc2, gamma2, beta2, 256, Houtc2, Woutc2, "train", ema_mean2, ema_var2, 0.99, 1e-5)
+print("✓ BN2 succeeded!")
+print("BN2 output: " + nrow(outbn2) + " x " + ncol(outbn2))
+
+print("")
+print("=== All steps completed successfully! ===")
+print("This suggests the error is not in the basic forward pass logic.")
+print("The error might be in a different context or with different data.")

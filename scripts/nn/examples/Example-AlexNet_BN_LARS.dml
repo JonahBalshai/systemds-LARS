@@ -36,7 +36,6 @@
  * - Proper integration with existing lars.dml and lars_util.dml
  * - Fixed learning rate scheduling using lars_util.dml
  * - Added polynomial weight decay as described in the LARS paper
- * - Integrated grouped convolutions and LRN layers
  */
 
 # CORRECTED: Import the new AlexNet implementation with LARS support
@@ -110,13 +109,14 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
   print("Loading ImageNet dataset...")
   [X_train, Y_train, X_val, Y_val] = load_imagenet_data(Hin, Win, num_classes)
   
-  print("\nModel architecture:")
-  print("- Conv1: 96 filters 11x11 → ReLU → LRN → MaxPool")
-  print("- Conv2: 256 filters 5x5 (groups=2) → ReLU → LRN → MaxPool")
-  print("- Conv3: 384 filters 3x3 → ReLU")
-  print("- Conv4: 384 filters 3x3 (groups=2) → ReLU")
-  print("- Conv5: 256 filters 3x3 (groups=2) → ReLU → MaxPool")
+  print("\nModel architecture (AlexNet-BN as per LARS paper):")
+  print("- Conv1: 96 filters 11x11 → BN → ReLU → MaxPool")
+  print("- Conv2: 256 filters 5x5 → BN → ReLU → MaxPool")
+  print("- Conv3: 384 filters 3x3 → BN → ReLU")
+  print("- Conv4: 384 filters 3x3 → BN → ReLU")
+  print("- Conv5: 256 filters 3x3 → BN → ReLU → MaxPool")
   print("- FC layers: 4096 → 4096 → " + num_classes)
+  print("Note: Using Batch Normalization instead of LRN as per LARS paper")
   print("")
   
   N_train = nrow(X_train)
@@ -154,9 +154,9 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     epoch_acc = 0
     
     # IMPROVEMENT: Add data shuffling for better training
-    # permutation = sample(N_train, N_train, FALSE)
-    # X_train = X_train[permutation,]
-    # Y_train = Y_train[permutation,]
+    # For now, skip shuffling to avoid indexing issues
+    X_train_shuffled = X_train
+    Y_train_shuffled = Y_train
     
     for (iter in 1:iters_per_epoch) {
       # CORRECTED: Get learning rate with warmup and decay using lars_util
@@ -172,8 +172,8 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
       # Get batch
       beg = ((iter-1) * batch_size) %% N_train + 1
       end = min(N_train, beg + batch_size - 1)
-      X_batch = X_train[beg:end,]
-      Y_batch = Y_train[beg:end,]
+      X_batch = X_train_shuffled[beg:end,]
+      Y_batch = Y_train_shuffled[beg:end,]
       
       # Forward pass with batch normalization
       [predictions, cached_out, emas_upd] = alexnet::forward_with_bn(
@@ -229,7 +229,7 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
     val_accs[epoch,1] = val_acc
     
     # Print epoch summary
-    epoch_time = (time() - epoch_start_time) / 1000.0  # seconds
+    epoch_time = (time() - epoch_start_time) / 1000000.0  # Convert microseconds to seconds
     train_loss_val = as.scalar(train_losses[epoch,1])
     train_acc_val = as.scalar(train_accs[epoch,1])
     print("----------------------------------------")
@@ -249,7 +249,7 @@ train_alexnet_bn_lars = function(int batch_size=1024, int epochs=-1, double base
   }
   
   # Training completed
-  total_time = (time() - start_time) / 1000.0 / 60.0  # minutes
+  total_time = (time() - start_time) / 1000000.0 / 60.0  # Convert to minutes
   print("")
   print("Training completed in " + total_time + " minutes")
   final_val_acc = as.scalar(val_accs[epochs,1])
@@ -269,7 +269,7 @@ load_imagenet_data = function(int Hin, int Win, int num_classes)
    */
   
   # Choose data source: "csv", "binary", or "dummy"
-  data_source = "dummy"  # Change to "binary" after running load_imagenet_csv.dml
+  data_source = "csv"  # Change to "binary" after running load_imagenet_csv.dml
   
   if (data_source == "binary") {
     print("Loading ImageNet data from binary files...")
@@ -526,16 +526,18 @@ quick_test = function() {
 # Main execution with options
 print("CORRECTED: AlexNet-BN ImageNet Training with LARS")
 print("Based on 'Large Batch Training of Convolutional Networks'")
-print("Now includes: Polynomial weight decay, Grouped convolutions, LRN layers")
+print("Now includes: Polynomial weight decay as per LARS paper")
 print("")
 
 # Option 1: Quick test to validate implementation
 quick_test()
 print("")
 
-# Option 2: Train with smaller batch size for demonstration
+# Option 2: Train with proper training duration
 print("Running training demo...")
-[model, metrics] = train_alexnet_bn_lars(64, 2, 0.02)
+# Use proper training duration: 20 epochs with adjusted hyperparameters
+# Lower LR to prevent instability with small dataset
+[model, metrics] = train_alexnet_bn_lars(64, 20, 0.005)
 
 # Save final model and metrics
 # write(metrics, "alexnet_bn_lars_metrics.csv", format="csv")

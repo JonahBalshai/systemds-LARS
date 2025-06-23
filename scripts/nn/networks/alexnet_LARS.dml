@@ -39,11 +39,9 @@ source("nn/optim/lars_util.dml") as lars_util
 # Import layer implementations
 source("nn/layers/affine.dml") as affine
 source("nn/layers/conv2d_builtin.dml") as conv2d
-source("nn/layers/conv2d_grouped.dml") as conv2d_grouped
 source("nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
 source("nn/layers/dropout.dml") as dropout
 source("nn/layers/l2_reg.dml") as l2_reg
-source("nn/layers/lrn.dml") as lrn
 source("nn/layers/max_pool2d_builtin.dml") as max_pool2d
 source("nn/layers/relu.dml") as relu
 source("nn/layers/softmax.dml") as softmax
@@ -59,12 +57,12 @@ forward = function(matrix[double] X, int C, int Hin, int Win,
   /*
    * Forward pass of the AlexNet model.
    *
-   * Architecture (following original AlexNet paper):
-   * - Conv1: 96 filters, 11x11, stride 4, pad 0 → ReLU → LRN → MaxPool 3x3, stride 2
-   * - Conv2: 256 filters, 5x5, stride 1, pad 2, groups=2 → ReLU → LRN → MaxPool 3x3, stride 2  
+   * Architecture (standard AlexNet without BN):
+   * - Conv1: 96 filters, 11x11, stride 4, pad 0 → ReLU → MaxPool 3x3, stride 2
+   * - Conv2: 256 filters, 5x5, stride 1, pad 2 → ReLU → MaxPool 3x3, stride 2  
    * - Conv3: 384 filters, 3x3, stride 1, pad 1 → ReLU
-   * - Conv4: 384 filters, 3x3, stride 1, pad 1, groups=2 → ReLU
-   * - Conv5: 256 filters, 3x3, stride 1, pad 1, groups=2 → ReLU → MaxPool 3x3, stride 2
+   * - Conv4: 384 filters, 3x3, stride 1, pad 1 → ReLU
+   * - Conv5: 256 filters, 3x3, stride 1, pad 1 → ReLU → MaxPool 3x3, stride 2
    * - FC1: 4096 neurons → ReLU → Dropout
    * - FC2: 4096 neurons → ReLU → Dropout
    * - FC3: num_classes neurons → Softmax
@@ -81,28 +79,26 @@ forward = function(matrix[double] X, int C, int Hin, int Win,
   W8 = as.matrix(model[15]); b8 = as.matrix(model[16])
 
   # Forward pass
-  # Conv1 → ReLU → LRN → MaxPool1
+  # Conv1 → ReLU → MaxPool1
   [outc1, Houtc1, Woutc1] = conv2d::forward(X, W1, b1, C, Hin, Win, 11, 11, 4, 4, 0, 0)
   outr1 = relu::forward(outc1)
-  outlrn1 = lrn::forward(outr1, 96, Houtc1, Woutc1, 5, 0.0001, 0.75, 2)
-  [outp1, Houtp1, Woutp1] = max_pool2d::forward(outlrn1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
+  [outp1, Houtp1, Woutp1] = max_pool2d::forward(outr1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
   
-  # Conv2 → ReLU → LRN → MaxPool2 (with groups=2)
-  [outc2, Houtc2, Woutc2] = conv2d_grouped::forward(outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2, 2)
+  # Conv2 → ReLU → MaxPool2
+  [outc2, Houtc2, Woutc2] = conv2d::forward(outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2)
   outr2 = relu::forward(outc2)
-  outlrn2 = lrn::forward(outr2, 256, Houtc2, Woutc2, 5, 0.0001, 0.75, 2)
-  [outp2, Houtp2, Woutp2] = max_pool2d::forward(outlrn2, 256, Houtc2, Woutc2, 3, 3, 2, 2, 0, 0)
+  [outp2, Houtp2, Woutp2] = max_pool2d::forward(outr2, 256, Houtc2, Woutc2, 3, 3, 2, 2, 0, 0)
   
   # Conv3 → ReLU
   [outc3, Houtc3, Woutc3] = conv2d::forward(outp2, W3, b3, 256, Houtp2, Woutp2, 3, 3, 1, 1, 1, 1)
   outr3 = relu::forward(outc3)
   
-  # Conv4 → ReLU (with groups=2)
-  [outc4, Houtc4, Woutc4] = conv2d_grouped::forward(outr3, W4, b4, 384, Houtc3, Woutc3, 3, 3, 1, 1, 1, 1, 2)
+  # Conv4 → ReLU
+  [outc4, Houtc4, Woutc4] = conv2d::forward(outr3, W4, b4, 384, Houtc3, Woutc3, 3, 3, 1, 1, 1, 1)
   outr4 = relu::forward(outc4)
   
-  # Conv5 → ReLU → MaxPool3 (with groups=2)
-  [outc5, Houtc5, Woutc5] = conv2d_grouped::forward(outr4, W5, b5, 384, Houtc4, Woutc4, 3, 3, 1, 1, 1, 1, 2)
+  # Conv5 → ReLU → MaxPool3
+  [outc5, Houtc5, Woutc5] = conv2d::forward(outr4, W5, b5, 384, Houtc4, Woutc4, 3, 3, 1, 1, 1, 1)
   outr5 = relu::forward(outc5)
   [outp5, Houtp5, Woutp5] = max_pool2d::forward(outr5, 256, Houtc5, Woutc5, 3, 3, 2, 2, 0, 0)
   
@@ -131,8 +127,8 @@ forward = function(matrix[double] X, int C, int Hin, int Win,
   out = softmax::forward(outa8)
 
   # Cache intermediate outputs for backward pass
-  cached_out = list(X, outc1, Houtc1, Woutc1, outr1, outlrn1, outp1, Houtp1, Woutp1,
-                    outc2, Houtc2, Woutc2, outr2, outlrn2, outp2, Houtp2, Woutp2,
+  cached_out = list(X, outc1, Houtc1, Woutc1, outr1, outp1, Houtp1, Woutp1,
+                    outc2, Houtc2, Woutc2, outr2, outp2, Houtp2, Woutp2,
                     outc3, Houtc3, Woutc3, outr3, outc4, Houtc4, Woutc4, outr4,
                     outc5, Houtc5, Woutc5, outr5, outp5, Houtp5, Woutp5,
                     outa6, outr6, outd6, maskd6, outa7, outr7, outd7, maskd7, outa8)
@@ -194,26 +190,24 @@ backward = function(matrix[double] dOut, list[unknown] cached_out,
   # Conv5 (with groups=2)
   doutr5 = max_pool2d::backward(doutp5, Houtp5, Woutp5, outr5, 256, Houtc5, Woutc5, 3, 3, 2, 2, 0, 0)
   doutc5 = relu::backward(doutr5, outc5)
-  [doutr4, dW5, db5] = conv2d_grouped::backward(doutc5, Houtc5, Woutc5, outr4, W5, b5, 384, Houtc4, Woutc4, 3, 3, 1, 1, 1, 1, 2)
+  [doutr4, dW5, db5] = conv2d::backward(doutc5, Houtc5, Woutc5, outr4, W5, b5, 384, Houtc4, Woutc4, 3, 3, 1, 1, 1, 1)
   
   # Conv4 (with groups=2)
   doutc4 = relu::backward(doutr4, outc4)
-  [doutr3, dW4, db4] = conv2d_grouped::backward(doutc4, Houtc4, Woutc4, outr3, W4, b4, 384, Houtc3, Woutc3, 3, 3, 1, 1, 1, 1, 2)
+  [doutr3, dW4, db4] = conv2d::backward(doutc4, Houtc4, Woutc4, outr3, W4, b4, 384, Houtc3, Woutc3, 3, 3, 1, 1, 1, 1)
   
   # Conv3
   doutc3 = relu::backward(doutr3, outc3)
   [doutp2, dW3, db3] = conv2d::backward(doutc3, Houtc3, Woutc3, outp2, W3, b3, 256, Houtp2, Woutp2, 3, 3, 1, 1, 1, 1)
   
-  # Conv2 (with LRN and groups=2)
-  doutr2 = max_pool2d::backward(doutp2, Houtp2, Woutp2, outlrn2, 256, Houtc2, Woutc2, 3, 3, 2, 2, 0, 0)
-  doutlrn2 = lrn::backward(doutr2, outr2, 256, Houtc2, Woutc2, 5, 0.0001, 0.75, 2)
-  doutc2 = relu::backward(doutlrn2, outc2)
-  [doutp1, dW2, db2] = conv2d_grouped::backward(doutc2, Houtc2, Woutc2, outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2, 2)
+  # Conv2
+  doutr2 = max_pool2d::backward(doutp2, Houtp2, Woutp2, outr2, 256, Houtc2, Woutc2, 3, 3, 2, 2, 0, 0)
+  doutc2 = relu::backward(doutr2, outc2)
+  [doutp1, dW2, db2] = conv2d::backward(doutc2, Houtc2, Woutc2, outp1, W2, b2, 96, Houtp1, Woutp1, 5, 5, 1, 1, 2, 2)
   
-  # Conv1 (with LRN)
-  doutr1 = max_pool2d::backward(doutp1, Houtp1, Woutp1, outlrn1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
-  doutlrn1 = lrn::backward(doutr1, outr1, 96, Houtc1, Woutc1, 5, 0.0001, 0.75, 2)
-  doutc1 = relu::backward(doutlrn1, outc1)
+  # Conv1
+  doutr1 = max_pool2d::backward(doutp1, Houtp1, Woutp1, outr1, 96, Houtc1, Woutc1, 3, 3, 2, 2, 0, 0)
+  doutc1 = relu::backward(doutr1, outc1)
   [dX, dW1, db1] = conv2d::backward(doutc1, Houtc1, Woutc1, X, W1, b1, C, Hin, Win, 11, 11, 4, 4, 0, 0)
 
   # Package gradients
@@ -524,10 +518,10 @@ init = function(int C, int Hin, int Win, int num_classes, int seed)
   
   # Initialize convolutional layers
   [W1, b1] = conv2d::init(96, C, 11, 11, seed)      # Conv1: 96 11x11 filters
-  [W2, b2] = conv2d_grouped::init(256, 96, 5, 5, 2, seed)   # Conv2: 256 5x5 filters, groups=2  
+  [W2, b2] = conv2d::init(256, 96, 5, 5, seed)      # Conv2: 256 5x5 filters  
   [W3, b3] = conv2d::init(384, 256, 3, 3, seed)     # Conv3: 384 3x3 filters
-  [W4, b4] = conv2d_grouped::init(384, 384, 3, 3, 2, seed)  # Conv4: 384 3x3 filters, groups=2
-  [W5, b5] = conv2d_grouped::init(256, 384, 3, 3, 2, seed)  # Conv5: 256 3x3 filters, groups=2
+  [W4, b4] = conv2d::init(384, 384, 3, 3, seed)     # Conv4: 384 3x3 filters
+  [W5, b5] = conv2d::init(256, 384, 3, 3, seed)     # Conv5: 256 3x3 filters
 
   # Initialize fully connected layers
   [W6, b6] = affine::init(fc_input_size, 4096, seed)  # FC1
@@ -552,10 +546,10 @@ init_with_bn = function(int C, int Hin, int Win, int num_classes, int seed)
   
   # Initialize convolutional layers
   [W1, b1] = conv2d::init(96, C, 11, 11, seed)      # Conv1
-  [W2, b2] = conv2d_grouped::init(256, 96, 5, 5, 2, seed)   # Conv2: groups=2
+  [W2, b2] = conv2d::init(256, 96, 5, 5, seed)      # Conv2
   [W3, b3] = conv2d::init(384, 256, 3, 3, seed)     # Conv3
-  [W4, b4] = conv2d_grouped::init(384, 384, 3, 3, 2, seed)  # Conv4: groups=2
-  [W5, b5] = conv2d_grouped::init(256, 384, 3, 3, 2, seed)  # Conv5: groups=2
+  [W4, b4] = conv2d::init(384, 384, 3, 3, seed)     # Conv4
+  [W5, b5] = conv2d::init(256, 384, 3, 3, seed)     # Conv5
   
   # Initialize batch normalization parameters for each conv layer
   [gamma1, beta1, ema_mean1, ema_var1] = batch_norm2d::init(96)
@@ -621,9 +615,16 @@ update_params_with_lars = function(list[unknown] model, list[unknown] gradients,
     grad = as.matrix(gradients[i])
     momentum_state = as.matrix(optim_state[i])
     
+    # Determine if we should skip LARS for this parameter
+    # Skip for: bias terms (vectors), BN parameters (gamma, beta), and very small tensors
+    skip_lars = FALSE
+    if (nrow(param) == 1 | ncol(param) == 1) {
+      skip_lars = TRUE  # This is a bias or BN parameter
+    }
+    
     # Call your existing LARS implementation
     [param_upd, momentum_state_upd] = lars::update(
-        param, grad, global_lr, momentum, momentum_state, weight_decay, trust_coeff)
+        param, grad, global_lr, momentum, momentum_state, weight_decay, trust_coeff, skip_lars)
     
     model_upd = append(model_upd, param_upd)
     optim_state_upd = append(optim_state_upd, momentum_state_upd)
@@ -645,7 +646,7 @@ get_lars_hyperparams = function(int batch_size, boolean use_bn)
     # AlexNet-BN (better scaling properties)
     if (batch_size <= 512) {
       base_lr = 0.02
-      warmup_epochs = 5
+      warmup_epochs = 2  # Shorter warmup for demos
       total_epochs = 100
     } else if (batch_size <= 4096) {
       base_lr = 0.02  # Will be scaled to ~0.32 for 4K batch

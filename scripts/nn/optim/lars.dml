@@ -68,22 +68,24 @@ update = function(matrix[double] X,
   #-----------------------------------------------------------
   # 1.  Build gradient w/ weight-decay  (needed either way)
   #-----------------------------------------------------------
-  matrix[double] dX_wd =
-    (skip_lars) ? dX                  # ← no decay for bias / BN
-                : dX + lambda * X     # ← standard weight-decay
+  if (skip_lars) {
+    dX_wd = dX                  # no decay for bias / BN
+  } else {
+    dX_wd = dX + lambda * X     # standard weight-decay
+  }
 
   #-----------------------------------------------------------
   # 2.  Compute local LR  λ_l   (only if LARS is enabled)
   #-----------------------------------------------------------
-  double effective_lr = lr        # default: plain SGD
+  effective_lr = lr        # default: plain SGD
   if (!skip_lars) {
     
     # Compute L2 norms
-    double X_norm   = sqrt(sum(X ^ 2))
-    double dX_norm  = sqrt(sum(dX_wd ^ 2))         # <-- includes decay
-    double eps      = 1e-8
+    X_norm   = sqrt(sum(X ^ 2))
+    dX_norm  = sqrt(sum(dX_wd ^ 2))         # <-- includes decay
+    eps      = 1e-8
 
-    double local_lr = trust_coeff * X_norm / (dX_norm + eps)
+    local_lr = trust_coeff * X_norm / (dX_norm + eps)
 
     # optional safety-clamp (helps early-epoch stability)
     if (local_lr > 1.0)  local_lr = 1.0
