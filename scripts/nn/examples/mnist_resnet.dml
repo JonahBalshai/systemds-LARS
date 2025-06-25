@@ -67,13 +67,13 @@
 #
 
 source("nn/networks/resnet18.dml") as resnet
-source("scripts/nn/layers/logcosh_loss.dml") as logcosh
+source("scripts/nn/layers/softmax_cross_entropy_loss.dml") as loss_nn
 
 # Read the data
 fmt = "csv"
-train = read("nn/examples/data/mnist_train.csv", format=fmt)
-test = read("nn/examples/data/mnist_test.csv", format=fmt)
-out_dir = "nn/example/model/mnist_resnet"
+train = read("scripts/nn/examples/data/mnist_train.csv", format=fmt)
+test = read("scripts/nn/examples/data/mnist_test.csv", format=fmt)
+out_dir = "scripts/nn/example/model/mnist_resnet"
 
 # Extract images and labels
 images = train[,2:ncol(train)]
@@ -104,19 +104,21 @@ Y_test = table(seq(1, N_test), labels_test+1, N_test, 10)
 # Get initial optimizer parameters
 optimizer_params = resnet::init_lars_optim_params(classes)
 
+# optimizer_params = resnet::init_sgd_momentum_optim_params(classes)
+
 # Define image properties
 Hin = 28
 Win = 28
 #N_val = 0
 
 # Define training parameters
-epochs = 10
-batch_size = 16
+epochs = 50
+batch_size = 256
 
 [accuracy, loss_metric, learned_model, learned_emas] = train(X, Y, X_test, Y_test, model, ema_means_vars, N, Hin, Win, epochs, batch_size, optimizer_params)
 
-write(accuracy, "nn/examples/out/resnet_mnist_accuracy.csv", format="csv")
-write(loss_metric, "nn/examples/out/resnet_mnist_loss.csv", format="csv")
+write(accuracy, "scripts/nn/examples/out/resnet_mnist_accuracy.csv", format="csv")
+write(loss_metric, "scripts/nn/examples/out/resnet_mnist_loss.csv", format="csv")
 
 #Train
 train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matrix[double] Y_test, list[unknown] model, list[unknown] emas, int samples, int Hin,
@@ -125,18 +127,20 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
             list[unknown] learned_model, list[unknown] learned_emas) {
 
     # Optimizer hyperparameters
-    lr = 0.001
+    lr = 0.01
     epsilon = 1e-8 # TODO: technically this is hardcoded in the LARS optimizer but other optims seem to take this as an argument. change it?
     momentum = 0.9
     trust_coeff = 0.001
+
+
     weight_decay = 0.0001
     decay_power = 2
 
     # Initialize metrics
     learned_model = list()
     learned_emas = list()
-    accuracy = matrix(0, rows=0, cols=1)
-    loss_metric = matrix(0, rows=0, cols=1)
+    accuracy = matrix(0, rows=epochs, cols=1)
+    loss_metric = matrix(0, rows=epochs, cols=1)
 
     iterations = ceil(samples/batch_size)
     mode = "train"
@@ -160,16 +164,20 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
             [out, emas, cached_out, cached_means_vars] = resnet::forward(X_batch, Hin, Win, model, mode, emas)
 
             # Loss
-            loss = logcosh::forward(out, Y_batch)
+            loss = loss_nn::forward(out, Y_batch)
+            print(" - Loss: " + loss)
             loss_avg = (loss_avg * (i - 1) + loss) / i
+            print(" - Average loss: " + loss_avg)
 
             # Backward
-            dOut = logcosh::backward(out, Y_batch)
+            dOut = loss_nn::backward(out, Y_batch)
             [dX, gradients] = resnet::backward(dOut, cached_out, model, cached_means_vars)
 
             # Update parameters
             [model, optim_params] = resnet::update_params_with_lars(model, gradients, lr, momentum, weight_decay, trust_coeff,
                   optim_params)
+
+            # [model, optim_params] = resnet::update_params_with_sgd_momentum(model, gradients, lr, momentum, optim_params)
         }
 
         # Reshuffle mini batches
@@ -186,8 +194,8 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
         accuracy_scalar = eval(out, Y_test)
 
         # Append to the epoch-wise metrics
-        loss_metric = rbind(loss_metric, matrix(loss_avg, rows=1, cols=1))
-        accuracy = rbind(accuracy, matrix(accuracy_scalar, rows=1, cols=1))
+        loss_metric[epoch, 1] = loss_avg
+        accuracy[epoch, 1] = accuracy_scalar
 
         print("Epoch Avg. Loss: " + loss_avg)
         print("Epoch Accuracy: " + accuracy_scalar)
