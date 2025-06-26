@@ -112,7 +112,7 @@ Win = 28
 #N_val = 0
 
 # Define training parameters
-epochs = 50
+epochs = 30
 batch_size = 256
 
 [accuracy, loss_metric, learned_model, learned_emas] = train(X, Y, X_test, Y_test, model, ema_means_vars, N, Hin, Win, epochs, batch_size, optimizer_params)
@@ -126,15 +126,26 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
     return (matrix[double] accuracy, matrix[double] loss_metric, 
             list[unknown] learned_model, list[unknown] learned_emas) {
 
+    # --- LEARNING RATE SCHEDULE HYPERPARAMETERS ---
+    # The learning rate we want to reach AFTER warmup
+    initial_lr = 0.01 
+    # A very small final learning rate to decay towards
+    end_lr = 0.00001 
+    # Number of warmup epochs, as per the paper
+    warmup_epochs = 5
+    # The exponent for the polynomial decay, as per the paper
+    power = 2.0
+
     # Optimizer hyperparameters
-    lr = 0.01
-    epsilon = 1e-8 # TODO: technically this is hardcoded in the LARS optimizer but other optims seem to take this as an argument. change it?
     momentum = 0.9
     trust_coeff = 0.001
-
-
     weight_decay = 0.0001
-    decay_power = 2
+    
+    # Calculate total iterations for the schedule
+    iterations_per_epoch = ceil(samples / batch_size)
+    total_iterations = epochs * iterations_per_epoch
+    warmup_iterations = warmup_epochs * iterations_per_epoch
+    decay_iterations = total_iterations - warmup_iterations
 
     # Initialize metrics
     learned_model = list()
@@ -153,10 +164,29 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
         for (i in 1:iterations) {
             print(" - Iteration: " + i + "/" + iterations)
 
+            # --- START DYNAMIC LEARNING RATE LOGIC ---
+            current_iteration = (epoch - 1) * iterations_per_epoch + i
+            current_lr = 0.0
+
+            if (current_iteration < warmup_iterations) {
+                # 1. Linear Warmup Phase
+                # Linearly increase LR from 0 to initial_lr over warmup_iterations
+                current_lr = initial_lr * (as.double(current_iteration) / warmup_iterations)
+            } else {
+                # 2. Polynomial Decay Phase
+                decay_step = current_iteration - warmup_iterations
+                decay_progress = as.double(decay_step) / decay_iterations
+                current_lr = end_lr + (initial_lr - end_lr) * (1 - decay_progress)^power
+            }
+            
+            if (i == 1) { # Print LR once per epoch to reduce log spam
+                print("Using Learning Rate: " + current_lr)
+            }
+            # --- END DYNAMIC LEARNING RATE LOGIC ---
+
             # Get batch
             start = (i - 1) * batch_size + 1
             end = min(samples, i * batch_size)
-
             X_batch = X[start:end,]
             Y_batch = Y[start:end,]
 
@@ -165,16 +195,17 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
 
             # Loss
             loss = loss_nn::forward(out, Y_batch)
-            print(" - Loss: " + loss)
+            if (i %% 10 == 0) { # Print loss less frequently on large datasets
+                print(" - Iteration: " + i + "/" + iterations + ", Loss: " + loss)
+            }
             loss_avg = (loss_avg * (i - 1) + loss) / i
-            print(" - Average loss: " + loss_avg)
 
             # Backward
             dOut = loss_nn::backward(out, Y_batch)
             [dX, gradients] = resnet::backward(dOut, cached_out, model, cached_means_vars)
 
             # Update parameters
-            [model, optim_params] = resnet::update_params_with_lars(model, gradients, lr, momentum, weight_decay, trust_coeff,
+            [model, optim_params] = resnet::update_params_with_lars(model, gradients, current_lr, momentum, weight_decay, trust_coeff,
                   optim_params)
 
             # [model, optim_params] = resnet::update_params_with_sgd_momentum(model, gradients, lr, momentum, optim_params)
@@ -226,6 +257,7 @@ predict = function(matrix[double] X, int Hin, int Win,
     mode = "test"
     [out, temp_emas, temp_cached_out, temp_cached_means_vars] = resnet::forward(X, Hin, Win, model, mode, emas)
 }
+
 
 eval = function(matrix[double] probs, matrix[double] Y)
     return(double accuracy) {
