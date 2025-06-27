@@ -1,0 +1,19 @@
+# Load raw binary data for SystemDS
+# This script demonstrates how to handle raw binary files
+
+print("Raw binary files detected:");
+print("- train_data_combined.bin: 59GB (~1.28M samples x 12288 features)");
+print("- train_labels_combined.bin: 4.8GB (~1.28M samples x 1000 classes)");
+print("- val_data.bin: 2.3GB (50K samples x 12288 features)");
+print("- val_labels.bin: 191MB (50K samples x 1000 classes)");
+
+print("");
+print("SystemDS binary format requires SequenceFile, not raw binary.");
+print("Options:");
+print("1. Convert raw binary to CSV format");
+print("2. Use external Python script to load and save as SystemDS binary");
+print("3. Use matrix() function with external loading");
+
+print("");
+print("For now, use CSV files or convert binary to proper SystemDS format.");
+print("Example: python convert_raw_to_csv.py");

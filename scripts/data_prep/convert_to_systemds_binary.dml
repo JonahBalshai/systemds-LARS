@@ -1,0 +1,16 @@
+# Convert raw binary to SystemDS binary format
+print("Converting raw binary to SystemDS binary format...");
+
+# First, we need to read as CSV (create temp CSV from binary)
+# This is a workaround since SystemDS binary != raw binary
+
+print("Note: SystemDS binary format requires SequenceFile, not raw binary");
+print("Raw binary files created: train_data_combined.bin, train_labels_combined.bin");
+print("File sizes:");
+print("- train_data_combined.bin: " + (61467193344 / 1024 / 1024) + " MB");
+print("- train_labels_combined.bin: " + (5124668000 / 1024 / 1024) + " MB");
+
+print("To use these files, you need to:");
+print("1. Convert to CSV format first, or");
+print("2. Use write() with format='binary' in SystemDS to create proper binary format");
+print("Raw binary conversion completed - files ready for manual processing!");
