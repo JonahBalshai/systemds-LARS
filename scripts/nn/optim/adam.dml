@@ -43,7 +43,7 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double beta1, 
    *  - beta2: Exponential decay rate for the 2nd moment estimates.
    *      Recommended value is 0.999.
    *  - epsilon: Smoothing term to avoid divide by zero errors.
-   *      Recommended value is 1e-8.
+   *      Recommended value is 1e-4 for stability (not 1e-8).
    *  - t: Timestep, starting at 0.
    *  - m: State containing the 1st moment (mean) estimate by
    *      maintaining exponential moving averages of the gradients, of

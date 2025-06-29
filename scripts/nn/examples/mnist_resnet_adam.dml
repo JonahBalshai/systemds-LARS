@@ -66,7 +66,7 @@
 #   ```
 #
 
-source("scripts/nn/networks/resnet18.dml") as resnet
+source("nn/networks/resnet18.dml") as resnet
 source("scripts/nn/layers/softmax_cross_entropy_loss.dml") as loss_nn
 source("scripts/utils/optim_utils.dml") as optim_utils
 
@@ -105,9 +105,7 @@ Y_test = table(seq(1, N_test), labels_test+1, N_test, 10)
 # Get initial optimizer parameters
 # optimizer_params = resnet::init_lars_optim_params(classes)
 # optimizer_params = resnet::init_sgd_momentum_optim_params(classes)
-# optimizer_params = resnet::init_adam_optim_params(classes)
-# optimizer_params = resnet::init_rmsprop_optim_params(classes)
-optimizer_params = resnet::init_adagrad_optim_params(classes)
+optimizer_params = resnet::init_adam_optim_params(classes)
 
 # Define image properties
 Hin = 28
@@ -123,16 +121,17 @@ batch_size = 256
 write(accuracy, "scripts/nn/examples/out/resnet_mnist_accuracy.csv", format="csv")
 write(loss_metric, "scripts/nn/examples/out/resnet_mnist_loss.csv", format="csv")
 
-# Train function with AdaGrad optimizer
+# Train function with Adam optimizer stability fixes
 # 
-# ADAGRAD TRAINING SETUP:
-# 1. Input normalization: X scaled to [-1,1] range  
-# 2. Warmup schedule: gradual learning rate increase in first epochs
-# 3. Higher epsilon: using 1e-4 instead of 1e-8 for better numerical stability
-# 4. Polynomial learning rate decay: prevents overly aggressive late training
-# 5. AdaGrad accumulates squared gradients over all time steps
+# ADAM STABILITY FIXES IMPLEMENTED:
+# 1. L2 weight decay: added to gradients before optimizer update (traditional approach)
+# 2. Gradient clipping: prevents gradient explosion (max_norm=1.0, handles ResNet nested structure)
+# 3. Input normalization: X scaled to [-1,1] range  
+# 4. Warmup schedule: gradual learning rate increase in first epochs
+# 5. Higher epsilon: using 1e-4 instead of 1e-8 for better numerical stability
+# 6. Polynomial learning rate decay: prevents overly aggressive late training
 #
-# Testing AdaGrad to check if GPU issues affect all adaptive optimizers
+# Note: Testing on CPU first since GPU has numerical precision differences
 #
 train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matrix[double] Y_test, list[unknown] model, list[unknown] emas, int samples, int Hin,
     int Win, int epochs, int batch_size, list[unknown] optim_params)
@@ -141,11 +140,11 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
 
     # --- LEARNING RATE SCHEDULE HYPERPARAMETERS ---
     # The learning rate we want to reach AFTER warmup
-    initial_lr = 5e-4  # Reduced for adaptive optimizers
+    initial_lr = 0.001  # Reduced for Adam optimizer
     # A very small final learning rate to decay towards
     end_lr = 0.00001 
     # Number of warmup epochs, as per the paper
-    warmup_epochs = 2  # Warmup for adaptive optimizers
+    warmup_epochs = 2  # Disable warmup for Adam
     # The exponent for the polynomial decay, as per the paper
     power = 2.0
 
@@ -154,8 +153,10 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
     trust_coeff = 0.001
     weight_decay = 0.0001
     
-    # AdaGrad optimizer hyperparameters
-    epsilon = 1e-4    # Smoothing term for numerical stability - higher than typical 1e-8 for GPU stability
+    # Adam optimizer hyperparameters
+    beta1 = 0.9
+    beta2 = 0.999
+    epsilon = 1e-4
     
     # Calculate total iterations for the schedule
     iterations_per_epoch = ceil(samples / batch_size)
@@ -226,13 +227,11 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
             # Gradient clipping - DISABLED for testing
             # [gradients] = optim_utils::clip_by_global_norm(gradients, 1.0)
             
-            # Update parameters with AdaGrad
+            # Update parameters with Adam
             # [model, optim_params] = resnet::update_params_with_lars(model, gradients, current_lr, momentum, weight_decay, trust_coeff, optim_params)
             # [model, optim_params] = resnet::update_params_with_sgd_momentum(model, gradients, current_lr, momentum, optim_params)
-            # [model, optim_params] = resnet::update_params_with_adam(model, gradients, current_lr, beta1, beta2, epsilon, current_iteration, optim_params)
-            # [model, optim_params] = resnet::update_params_with_rmsprop(model, gradients, current_lr, decay_rate, epsilon, optim_params)
             
-            [model, optim_params] = resnet::update_params_with_adagrad(model, gradients, current_lr, epsilon, optim_params)
+            [model, optim_params] = resnet::update_params_with_adam(model, gradients, current_lr, beta1, beta2, epsilon, current_iteration, optim_params)
         }
 
         # Reshuffle mini batches

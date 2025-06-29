@@ -1,0 +1,160 @@
+#-------------------------------------------------------------
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#-------------------------------------------------------------
+
+/*
+ * Optimization utility functions for neural networks
+ */
+
+clip_by_global_norm = function(list[unknown] grads, double max_norm)
+    return (list[unknown] grads_out) {
+  /*
+   * Clips gradients by their global L2 norm for ResNet nested structure.
+   * 
+   * ResNet gradient structure: [conv1, bn1, layer1[blocks...], layer2[blocks...], affine]
+   * Each layer contains blocks, each block contains parameter gradients.
+   *
+   * Inputs:
+   *  - grads: ResNet gradient list with nested structure
+   *  - max_norm: Maximum allowed global L2 norm. Typical values: 0.5-5.0
+   *
+   * Outputs:
+   *  - grads_out: Clipped gradients with same structure as input.
+   */
+  
+  # 1. Compute global squared norm across all gradients
+  sq_norm = 0
+  
+  # First 3 elements: conv1, bn1_W, bn1_b (matrices)
+  for (i in 1:3) {
+    g = as.matrix(grads[i])
+    sq_norm = sq_norm + sum(g * g)
+  }
+  
+  # Next 4 elements: layer1, layer2, layer3, layer4 (nested lists)
+  for (layer in 4:7) {
+    layer_grads = as.list(grads[layer])
+    for (block in 1:length(layer_grads)) {
+      block_grads = as.list(layer_grads[block])
+      for (param in 1:length(block_grads)) {
+        g = as.matrix(block_grads[param])
+        sq_norm = sq_norm + sum(g * g)
+      }
+    }
+  }
+  
+  # Last element: affine layer (matrix)
+  g = as.matrix(grads[8])
+  sq_norm = sq_norm + sum(g * g)
+  
+  # 2. Determine scaling factor
+  global_norm = sqrt(sq_norm)
+  scale = 1.0
+  if (global_norm > max_norm) {
+    scale = max_norm / (global_norm + 1e-12)
+  }
+
+  # 3. Apply scaling with same structure traversal
+  grads_out = list()
+  
+  # First 3 elements: conv1, bn1_W, bn1_b
+  for (i in 1:3) {
+    g = as.matrix(grads[i])
+    grads_out = append(grads_out, g * scale)
+  }
+  
+  # Next 4 elements: layer1, layer2, layer3, layer4
+  for (layer in 4:7) {
+    layer_grads = as.list(grads[layer])
+    layer_out = list()
+    for (block in 1:length(layer_grads)) {
+      block_grads = as.list(layer_grads[block])
+      block_out = list()
+      for (param in 1:length(block_grads)) {
+        g = as.matrix(block_grads[param])
+        block_out = append(block_out, g * scale)
+      }
+      layer_out = append(layer_out, block_out)
+    }
+    grads_out = append(grads_out, layer_out)
+  }
+  
+  # Last element: affine layer
+  g = as.matrix(grads[8])
+  grads_out = append(grads_out, g * scale)
+}
+
+add_weight_decay_to_gradients = function(list[unknown] grads, list[unknown] model, double weight_decay)
+    return (list[unknown] grads_out) {
+  /*
+   * Adds L2 weight decay to ResNet gradients.
+   * 
+   * L2 regularization formula: gradient = gradient + weight_decay * parameter
+   * This encourages smaller weights and helps prevent overfitting.
+   *
+   * Inputs:
+   *  - grads: ResNet gradient list with nested structure
+   *  - model: ResNet model parameters with same structure as grads
+   *  - weight_decay: L2 penalty coefficient (typical: 1e-4 to 1e-5)
+   *
+   * Outputs:
+   *  - grads_out: Gradients with weight decay added, same structure as input
+   */
+  
+  grads_out = list()
+  
+  # First 3 elements: conv1, bn1_W, bn1_b (matrices)
+  for (i in 1:3) {
+    grad = as.matrix(grads[i])
+    param = as.matrix(model[i])
+    grad_with_decay = grad + weight_decay * param
+    grads_out = append(grads_out, grad_with_decay)
+  }
+  
+  # Next 4 elements: layer1, layer2, layer3, layer4 (nested lists)
+  for (layer in 4:7) {
+    layer_grads = as.list(grads[layer])
+    layer_params = as.list(model[layer])
+    layer_out = list()
+    
+    for (block in 1:length(layer_grads)) {
+      block_grads = as.list(layer_grads[block])
+      block_params = as.list(layer_params[block])
+      block_out = list()
+      
+      for (param_idx in 1:length(block_grads)) {
+        grad = as.matrix(block_grads[param_idx])
+        param = as.matrix(block_params[param_idx])
+        grad_with_decay = grad + weight_decay * param
+        block_out = append(block_out, grad_with_decay)
+      }
+      layer_out = append(layer_out, block_out)
+    }
+    grads_out = append(grads_out, layer_out)
+  }
+  
+  # Last element: affine layer (matrix)
+  grad = as.matrix(grads[8])
+  param = as.matrix(model[8])
+  grad_with_decay = grad + weight_decay * param
+  grads_out = append(grads_out, grad_with_decay)
+}
+
+# Additional optimization utilities can be added here as needed 

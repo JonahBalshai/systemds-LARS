@@ -1,0 +1,12 @@
+{
+    "data_type": "matrix",
+    "value_type": "double",
+    "rows": 2,
+    "cols": 1,
+    "nnz": 2,
+    "format": "csv",
+    "author": "mateo",
+    "header": false,
+    "sep": ",",
+    "created": "2025-06-29 16:28:44 CEST"
+}
