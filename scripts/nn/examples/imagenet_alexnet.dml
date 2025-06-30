@@ -22,7 +22,7 @@
 # ImageNet AlexNet - Train
 #
 # This script trains a convolutional net using the "AlexNet" architecture
-# on 64x64 ImageNet images using LARS optimizer.
+# on 224x224 ImageNet images using LARS optimizer.
 #
 # Inputs:
 #  - train_data: File containing ImageNet training images (features)
@@ -42,10 +42,13 @@
 #   java -Xmx8g -Xms8g -cp "target/systemds-3.4.0-SNAPSHOT.jar:target/lib/*" \
 #   org.apache.sysds.api.DMLScript -f scripts/nn/examples/imagenet_alexnet.dml \
 #   -exec singlenode -gpu
+#   java -Xmx8g -Xms8g -cp "target/systemds-3.4.0-SNAPSHOT.jar:target/lib/*" org.apache.sysds.api.DMLScript -f scripts/nn/examples/imagenet_alexnet.dml -exec singlenode -gpu
 #   ```
 
-source("nn/networks/alexnet_LARS.dml") as alexnet
-source("nn/layers/softmax_cross_entropy_loss.dml") as loss_nn
+
+
+source("nn/networks/alexnet.dml") as alexnet
+source("nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
 
 # Read the ImageNet data
 fmt = "csv"
@@ -83,13 +86,13 @@ print("- Label sum check: " + mean(rowSums(Y)))
 
 # Get initial model parameters
 print("Initializing AlexNet model...")
-use_bn = TRUE  # Use batch normalization
+use_bn = FALSE  # Use batch normalization
 if (use_bn) {
     print("Using AlexNet with Batch Normalization")
-    [model, emas] = alexnet::init_with_bn(3, 64, 64, classes, 42)
+    [model, emas] = alexnet::init_with_bn(3, 224, 224, classes, 42)
 } else {
     print("Using standard AlexNet")
-    model = alexnet::init(3, 64, 64, classes, 42)
+    model = alexnet::init(3, 224, 224, classes, 42)
     emas = list()  # Empty for non-BN version
 }
 
@@ -98,8 +101,8 @@ print("Initializing LARS optimizer...")
 optimizer_params = alexnet::init_lars_optim_params(model)
 
 # Define image properties
-Hin = 64
-Win = 64
+Hin = 224
+Win = 224
 C = 3
 
 # Define training parameters
@@ -107,7 +110,7 @@ epochs = 30
 batch_size = 256
 
 print("Training configuration:")
-print("- Image size: " + Hin + "x" + Win + "x" + C)
+print("- Image size: " + Hin + "x" + Win + "x" + C + " (features: " + (Hin*Win*C) + ")")
 print("- Epochs: " + epochs)
 print("- Batch size: " + batch_size)
 print("- Use Batch Normalization: " + use_bn)
@@ -126,28 +129,20 @@ print("Final validation accuracy: " + final_accuracy)
 
 print("Training completed!")
 
-# Train function
 train = function(matrix[double] X, matrix[double] Y, matrix[double] X_val, matrix[double] Y_val, list[unknown] model, list[unknown] emas, 
     int samples, int C, int Hin, int Win, int epochs, int batch_size, list[unknown] optim_params, boolean use_bn)
     return (matrix[double] accuracy, matrix[double] loss_metric, 
             list[unknown] learned_model, list[unknown] learned_emas) {
 
-    # --- LEARNING RATE SCHEDULE HYPERPARAMETERS ---
-    # The learning rate we want to reach AFTER warmup
+    # --- HYPERPARAMETERS ---
     initial_lr = 0.01 
-    # A very small final learning rate to decay towards
     end_lr = 0.00001 
-    # Number of warmup epochs, as per the paper
     warmup_epochs = 5
-    # The exponent for the polynomial decay, as per the paper
     power = 2.0
-
-    # Optimizer hyperparameters
     momentum = 0.9
     trust_coeff = 0.001
     weight_decay = 0.0005
     
-    # Calculate total iterations for the schedule
     iterations_per_epoch = ceil(samples / batch_size)
     total_iterations = epochs * iterations_per_epoch
     warmup_iterations = warmup_epochs * iterations_per_epoch
@@ -163,105 +158,71 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_val, matri
     print("- Use BN: " + use_bn)
     print("")
 
-    # Initialize metrics
-    learned_model = list()
-    learned_emas = list()
     accuracy = matrix(0, rows=epochs, cols=1)
     loss_metric = matrix(0, rows=epochs, cols=1)
-
-    iterations = ceil(samples/batch_size)
     mode = "train"
 
     for (epoch in 1:epochs) {
         loss_avg = 0.0
-
         print("Start epoch: " + epoch + "/" + epochs)
 
-        for (i in 1:iterations) {
-            if (i %% 50 == 1) { # Print less frequently for large datasets
-                print(" - Iteration: " + i + "/" + iterations)
-            }
+        for (i in 1:iterations_per_epoch) {
+            if (i %% 50 == 1) { print(" - Iteration: " + i + "/" + iterations_per_epoch) }
 
-            # --- START DYNAMIC LEARNING RATE LOGIC ---
+            # --- DYNAMIC LEARNING RATE ---
             current_iteration = (epoch - 1) * iterations_per_epoch + i
-            current_lr = 0.0
-
             if (current_iteration < warmup_iterations) {
-                # 1. Linear Warmup Phase
-                # Linearly increase LR from 0 to initial_lr over warmup_iterations
                 current_lr = initial_lr * (as.double(current_iteration) / warmup_iterations)
             } else {
-                # 2. Polynomial Decay Phase
                 decay_step = current_iteration - warmup_iterations
                 decay_progress = as.double(decay_step) / decay_iterations
                 current_lr = end_lr + (initial_lr - end_lr) * (1 - decay_progress)^power
             }
-            
-            if (i == 1) { # Print LR once per epoch to reduce log spam
-                print("Using Learning Rate: " + current_lr)
-            }
-            # --- END DYNAMIC LEARNING RATE LOGIC ---
+            if (i == 1) { print("Using Learning Rate: " + current_lr) }
 
-            # Get batch
+            # --- BATCH PREPARATION ---
             start = (i - 1) * batch_size + 1
             end = min(samples, i * batch_size)
             X_batch = X[start:end,]
             Y_batch = Y[start:end,]
 
-            # Forward pass
-            if (use_bn) {
-                [out, cached_out, emas_upd] = alexnet::forward_with_bn(
-                    X_batch, C, Hin, Win, model, mode, 0.5)
-                # Update EMA parameters
-                emas = emas_upd
-            } else {
-                [out, cached_out] = alexnet::forward(
-                    X_batch, C, Hin, Win, model, mode, 0.5)
+            # --- FORWARD AND BACKWARD PASS ---
+            if (use_bn) { 
+                [out, cached_out, emas] = alexnet::forward_with_bn(X_batch, C, Hin, Win, model, "train", 0.5) 
+            } else { 
+                [out, cached_out] = alexnet::forward(X_batch, C, Hin, Win, model, "train", 0.5) 
             }
-
-            # Loss
-            loss = loss_nn::forward(out, Y_batch)
-            if (i %% 50 == 0) { # Print loss less frequently on large datasets
-                print(" - Iteration: " + i + "/" + iterations + ", Loss: " + loss)
-            }
+            loss = cross_entropy_loss::forward(out, Y_batch)
             loss_avg = (loss_avg * (i - 1) + loss) / i
-
-            # Backward
-            dOut = loss_nn::backward(out, Y_batch)
-            if (use_bn) {
-                [dX, gradients] = alexnet::backward_with_bn(
-                    dOut, cached_out, model, C, Hin, Win, 0.5)
-            } else {
-                [dX, gradients] = alexnet::backward(
-                    dOut, cached_out, model, C, Hin, Win, 0.5)
+            dOut = cross_entropy_loss::backward(out, Y_batch)
+            if (use_bn) { 
+                [dX, gradients] = alexnet::backward_with_bn(dOut, cached_out, model, C, Hin, Win, 0.5) 
+            } else { 
+                [dX, gradients] = alexnet::backward(dOut, cached_out, model, C, Hin, Win, 0.5) 
             }
-
-            # Update parameters
+            
+            # [THE FIX] The manual weight decay loop is REMOVED.
+            # We pass the pure gradients and the real weight_decay value to the updater.
             [model, optim_params] = alexnet::update_params_with_lars(
                 model, gradients, current_lr, momentum, weight_decay, 
                 trust_coeff, optim_params)
         }
 
-        # No data shuffling - data is already randomized from preprocessing
+        # --- EVALUATION ---
         print("Computing metrics for current epoch...")
-
-        # Predict on the validation dataset with batching to avoid OOM
-        if (use_bn) {
-            accuracy_scalar = predict_and_eval_batched_with_bn(X_val, Y_val, C, Hin, Win, model, emas, batch_size)
-        } else {
-            accuracy_scalar = predict_and_eval_batched(X_val, Y_val, C, Hin, Win, model, batch_size)
+        if (use_bn) { 
+            accuracy_scalar = predict_and_eval_batched_with_bn(X_val, Y_val, C, Hin, Win, model, emas, batch_size) 
+        } else { 
+            accuracy_scalar = predict_and_eval_batched(X_val, Y_val, C, Hin, Win, model, batch_size) 
         }
 
-        # Append to the epoch-wise metrics
         loss_metric[epoch, 1] = loss_avg
         accuracy[epoch, 1] = accuracy_scalar
-
         print("Epoch " + epoch + " completed:")
         print("- Avg. Loss: " + loss_avg)
         print("- Validation Accuracy: " + accuracy_scalar)
         print("")
     }
-
     learned_model = model
     learned_emas = emas
 }
@@ -358,24 +319,4 @@ predict_and_eval_batched_with_bn = function(matrix[double] X_val, matrix[double]
     }
     
     accuracy = correct_total / N_val
-}
-
-eval = function(matrix[double] probs, matrix[double] Y)
-    return(double accuracy) {
-    /*
-    * Evaluates a convolutional net using the "AlexNet" architecture.
-    *
-    * The probs matrix contains the class probability predictions
-    * of K classes over N examples.  The targets, Y, have K classes,
-    * and are one-hot encoded.
-    *
-    * Inputs:
-    *  - probs: Class probabilities, of shape (N, K).
-    *  - Y: Target matrix, of shape (N, K).
-    *
-    * Outputs:
-    *  - accuracy: Scalar accuracy, of shape (1).
-    */
-    correct_pred = rowIndexMax(probs) == rowIndexMax(Y)
-    accuracy = mean(correct_pred)
 }
