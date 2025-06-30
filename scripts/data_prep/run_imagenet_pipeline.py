@@ -9,57 +9,53 @@ from pathlib import Path
 from imagenet_pipeline import ImageNetPipeline
 
 def main():
-    """Run the ImageNet pipeline with predefined settings."""
+    """Run the ImageNet pipeline with simple configuration."""
+    print("🚀 ImageNet Pipeline Runner")
+    print("=" * 40)
     
-    # Set up paths for systemds-LARS project
-    project_root = Path(__file__).parent.parent.parent  # Go up to systemds-LARS root
+    # Auto-detect project root
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+    
+    # Default paths
     input_dir = project_root / "imagenet_data" / "6gb"
     output_dir = project_root / "imagenet_data" / "systemds_ready"
     
-    print("ImageNet Data Processing Pipeline - Quick Runner")
-    print("=" * 50)
-    print(f"Project root: {project_root}")
-    print(f"Input dir: {input_dir}")
-    print(f"Output dir: {output_dir}")
+    print(f"📁 Input directory: {input_dir}")
+    print(f"📁 Output directory: {output_dir}")
     
     # Check if input directory exists
     if not input_dir.exists():
-        print(f"\nERROR: Input directory not found: {input_dir}")
-        print("Make sure you have NPZ files in imagenet_data/6gb/")
-        sys.exit(1)
-    
-    # Check for NPZ files
-    npz_files = list(input_dir.glob("*.npz"))
-    if not npz_files:
-        print(f"\nERROR: No NPZ files found in {input_dir}")
-        print("Expected files: train_data_batch_*.npz and val_data.npz")
-        sys.exit(1)
-    
-    print(f"Found {len(npz_files)} NPZ files")
+        print(f"❌ Input directory not found: {input_dir}")
+        print("Please ensure ImageNet NPZ files are in imagenet_data/6gb/")
+        return
     
     # Initialize and run pipeline
-    pipeline = ImageNetPipeline(str(input_dir), str(output_dir))
-    
     try:
-        # Run full pipeline to create 2GB CSV files
-        pipeline.run_full_pipeline(csv_size_gb=2.0)
+        pipeline = ImageNetPipeline(str(input_dir), str(output_dir))
         
-        print("\n" + "="*50)
-        print("SUCCESS! Pipeline completed.")
-        print("Your files are ready:")
-        print("- imagenet_train_2GB.csv")
-        print("- imagenet_train_labels_2GB.csv") 
-        print("- imagenet_val_2GB.csv")
-        print("- imagenet_val_labels_2GB.csv")
-        print(f"\nLocation: {output_dir}")
+        # Run with 6GB target size (gives good training data amount)
+        results = pipeline.run_full_pipeline(csv_size_gb=6.0)
         
+        if results['success']:
+            print("\n🎉 Pipeline completed successfully!")
+            print("\n📋 Summary:")
+            print(f"  - Training samples: {results['csv_info']['training']['samples']:,}")
+            print(f"  - Validation samples: {results['csv_info']['validation']['samples']:,}")
+            print(f"  - Training CSV size: {results['csv_info']['training']['size_gb']:.2f} GB")
+            print(f"  - Validation CSV size: {results['csv_info']['validation']['size_gb']:.2f} GB")
+            
+            print("\n🔗 Next Steps:")
+            print("1. Use these commands to train your models:")
+            print(f"   ResNet: java -Xmx16g -cp 'target/...' ... -f scripts/nn/examples/imagenet_resnet.dml")
+            print(f"   AlexNet: java -Xmx16g -cp 'target/...' ... -f scripts/nn/examples/imagenet_alexnet.dml")
+        else:
+            print(f"\n❌ Pipeline failed: {results['error']}")
+    
     except Exception as e:
-        print(f"\nERROR: {e}")
-        print("\nTroubleshooting:")
-        print("1. Check that NPZ files are in imagenet_data/6gb/")
-        print("2. Ensure you have enough disk space")
-        print("3. Check file permissions")
-        sys.exit(1)
+        print(f"\n💥 Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 def inspect_only():
     """Just inspect the dataset without processing."""

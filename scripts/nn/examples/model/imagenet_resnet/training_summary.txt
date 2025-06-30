@@ -1,7 +1,0 @@
-ImageNet ResNet Training Summary
-================================
-Image size: 64x64x3
-Classes: 1000
-Batch size: 64
-Epochs: 10
-Final accuracy: 0.001

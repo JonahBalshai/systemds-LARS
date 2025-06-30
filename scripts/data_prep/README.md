@@ -1,157 +1,162 @@
-# ImageNet Data Processing Pipeline
+# ImageNet Data Pipeline for SystemDS
 
-This directory contains a unified pipeline for processing ImageNet data from NPZ format to SystemDS-compatible CSV files.
-
-## Overview
-
-The pipeline performs these key steps:
-1. **Inspect** NPZ files to understand data structure
-2. **Convert** NPZ files to efficient binary format
-3. **Sample** and create 2GB CSV files for SystemDS training
-
-## Files
-
-- `imagenet_pipeline.py` - Main pipeline class with full functionality
-- `run_imagenet_pipeline.py` - Simple runner script (recommended)
-- `binary_to_csv_chunks.py` - Legacy chunking script (from original workflow)
-- `convert_6gb_imagenet.py` - Legacy conversion script
-- `inspect_6gb_imagenet.py` - Legacy inspection script
+This pipeline processes ImageNet data from NPZ format to SystemDS-ready CSV files with proper normalization and formatting.
 
 ## Quick Start
 
-### 1. Run the Complete Pipeline (Recommended)
-
+**1. Run the complete pipeline:**
 ```bash
-cd scripts/data_prep
-python run_imagenet_pipeline.py
+python scripts/data_prep/run_imagenet_pipeline.py
+```
+This creates 6GB CSV files with 80:20 train/validation split.
+
+**2. Train your models:**
+```bash
+# ResNet-18
+java -Xmx16g -Xms16g -cp "target/systemds-3.4.0-SNAPSHOT.jar:target/lib/*" \
+  org.apache.sysds.api.DMLScript -f scripts/nn/examples/imagenet_resnet.dml -exec singlenode -gpu
+
+# AlexNet
+java -Xmx16g -Xms16g -cp "target/systemds-3.4.0-SNAPSHOT.jar:target/lib/*" \
+  org.apache.sysds.api.DMLScript -f scripts/nn/examples/imagenet_alexnet.dml -exec singlenode -gpu
 ```
 
-This will:
-- Process all NPZ files in `imagenet_data/6gb/`
-- Create binary files in `imagenet_data/systemds_ready/`
-- Generate the final 2GB CSV files:
-  - `imagenet_train_2GB.csv`
-  - `imagenet_train_labels_2GB.csv`
-  - `imagenet_val_2GB.csv`
-  - `imagenet_val_labels_2GB.csv`
+## Pipeline Overview
 
-### 2. Just Inspect Data (Optional)
-
-```bash
-python run_imagenet_pipeline.py inspect
-```
-
-### 3. Advanced Usage
-
-```bash
-# Full control with custom parameters
-python imagenet_pipeline.py --mode full --csv-size-gb 3.0
-
-# Only create CSV files (if binary files already exist)
-python imagenet_pipeline.py --mode csv-only --csv-size-gb 1.5
-
-# Only convert to binary format
-python imagenet_pipeline.py --mode binary
-
-# Just inspect the data
-python imagenet_pipeline.py --mode inspect
-```
-
-## Expected Data Structure
-
-### Input (NPZ files in `imagenet_data/6gb/`):
+### Input Data Structure
 ```
 imagenet_data/6gb/
-├── train_data_batch_1.npz
+├── train_data_batch_1.npz    # Training batches
 ├── train_data_batch_2.npz
 ├── ...
-├── train_data_batch_10.npz
-└── val_data.npz
+└── val_data.npz              # Validation data
 ```
 
-### Output (in `imagenet_data/systemds_ready/`):
+### Output Files
 ```
 imagenet_data/systemds_ready/
-├── imagenet_train_2GB.csv          # Final training data
-├── imagenet_train_labels_2GB.csv   # Final training labels
-├── imagenet_val_2GB.csv            # Final validation data
-├── imagenet_val_labels_2GB.csv     # Final validation labels
-├── *.mtd                           # SystemDS metadata files
-└── [binary files...]               # Intermediate binary files
+├── imagenet_train_6GB.csv           # Training data (80% of 6GB target)
+├── imagenet_train_labels_6GB.csv    # Training labels (one-hot encoded)
+├── imagenet_val_6GB.csv             # Validation data (20% of 6GB target)
+├── imagenet_val_labels_6GB.csv      # Validation labels (one-hot encoded)
+├── *.mtd files                      # SystemDS metadata
+└── Binary files for processing
 ```
 
-## NPZ File Format
+## Advanced Usage
 
-The pipeline expects NPZ files with:
-- `data`: Shape (N, 12288) uint8 [0, 255] - 64x64x3 flattened images
-- `labels`: Shape (N,) int64 [1, 1000] - 1-indexed class labels
-- `mean`: Shape (12288,) float64 - optional per-pixel mean
+### Custom Dataset Size
 
-## Data Transformations
+**Create different sized datasets:**
+```bash
+# 2GB dataset
+python scripts/data_prep/imagenet_pipeline.py --csv-size-gb 2.0
 
-1. **Normalization**: Images converted from uint8 [0,255] to float32 [0,1]
-2. **Label Conversion**: 1-indexed labels → 0-indexed labels → one-hot encoding
-3. **Format**: Binary format for efficiency, CSV format for SystemDS compatibility
+# 10GB dataset  
+python scripts/data_prep/imagenet_pipeline.py --csv-size-gb 10.0
 
-## Memory and Storage
+# 8GB dataset with 80:20 split
+python scripts/data_prep/imagenet_pipeline.py --csv-size-gb 8.0
+```
 
-- **Memory**: Processes data in batches to minimize RAM usage
-- **Storage**: Creates both binary (efficient) and CSV (compatible) formats
-- **Size**: 2GB CSV files are sampled from the full dataset
+### Step-by-Step Processing
+
+**1. Inspect data only:**
+```bash
+python scripts/data_prep/imagenet_pipeline.py --mode inspect
+```
+
+**2. Convert to binary (efficient processing):**
+```bash
+python scripts/data_prep/imagenet_pipeline.py --mode binary
+```
+
+**3. Create CSV samples:**
+```bash
+python scripts/data_prep/imagenet_pipeline.py --mode csv-only --csv-size-gb 6.0
+```
+
+## Data Processing Details
+
+### Train/Validation Split
+- **80%** for training
+- **20%** for validation
+- Files are named based on target size (e.g., `6GB`, `2GB`)
+
+### Image Preprocessing
+- **Normalization**: uint8 [0,255] → float32 [0,1]
+- **Format**: 64×64×3 images flattened to 12,288 features
+- **Memory-efficient**: Streaming processing for large datasets
+
+### Label Processing
+- **Input**: 1-indexed class labels [1-1000]
+- **Output**: 0-indexed one-hot vectors [1000 classes]
+- **Format**: Dense integer matrices for SystemDS
+
+### SystemDS Integration
+- **Metadata**: Auto-generated .mtd files for all CSV outputs
+- **Format**: CSV format optimized for SystemDS reading
+- **Memory**: Designed for 8GB+ heap sizes in SystemDS
+
+## Sample Data Statistics
+
+**6GB Dataset Example:**
+- Training: ~40,000 samples (4.8GB)
+- Validation: ~10,000 samples (1.2GB)
+- Features: 12,288 per sample (64×64×3)
+- Classes: 1,000 (ImageNet)
+
+## Training Configuration
+
+The pipeline generates files that work with these SystemDS training scripts:
+
+**ResNet-18:**
+- Uses `imagenet_train_6GB.csv` and `imagenet_val_6GB.csv`
+- Batch size: 256
+- 90 epochs with LARS optimizer
+- Memory: 16GB+ recommended
+
+**AlexNet:**
+- Uses same 6GB CSV files
+- Batch size: 256  
+- With batch normalization
+- Memory: 16GB+ recommended
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **"No NPZ files found"**
-   - Check that NPZ files are in the correct directory
-   - Verify file names match the expected pattern
-
-2. **"Combined binary files not found"**
-   - Run the full pipeline (`--mode full`) first
-   - Or run binary conversion (`--mode binary`) before CSV creation
-
-3. **Memory errors**
-   - The pipeline processes data in batches
-   - If still having issues, try reducing `--csv-size-gb`
-
-4. **Permission errors**
-   - Check write permissions in output directory
-   - Make sure the output directory can be created
-
-### Validation
-
-The pipeline includes automatic validation:
-- Checks data ranges and formats
-- Validates one-hot encoding
-- Verifies file sizes and metadata
-
-## SystemDS Integration
-
-The generated CSV files are ready for direct use in SystemDS:
-
-```dml
-# Load the processed data
-X_train = read("imagenet_train_2GB.csv", format="csv");
-Y_train = read("imagenet_train_labels_2GB.csv", format="csv");
-X_val = read("imagenet_val_2GB.csv", format="csv");
-Y_val = read("imagenet_val_labels_2GB.csv", format="csv");
-
-print("Training data: " + nrow(X_train) + " x " + ncol(X_train));
-print("Validation data: " + nrow(X_val) + " x " + ncol(X_val));
+### Memory Issues
+**Problem**: OutOfMemoryError during training
+**Solution**: Use larger heap size
+```bash
+java -Xmx20g -Xms20g -cp "..." ...
 ```
 
-## Performance
+### Dataset Size Issues
+**Problem**: Generated CSV is smaller than expected
+**Solution**: Check available samples in your NPZ files
+```bash
+python scripts/data_prep/imagenet_pipeline.py --mode inspect
+```
 
-- **Processing time**: ~5-15 minutes depending on system
-- **Disk space**: Requires ~15-20GB free space during processing
-- **Final output**: ~2-4GB total for CSV files
+### File Not Found Errors
+**Problem**: Training scripts can't find CSV files
+**Solution**: Check file naming matches your target size
+```bash
+ls imagenet_data/systemds_ready/imagenet_*6GB.csv
+```
 
-## Migration from Legacy Scripts
+### Training Accuracy Issues
+**Problem**: Very low accuracy (< 1%)
+**Solution**: 
+1. Verify data integrity with debug script
+2. Try AlexNet instead of ResNet for 64×64 images
+3. Check learning rate and batch size
 
-If you were using the old scripts:
-- `inspect_6gb_imagenet.py` → use `run_imagenet_pipeline.py inspect`
-- `convert_6gb_imagenet.py` → use `run_imagenet_pipeline.py`
-- `binary_to_csv_chunks.py` → functionality integrated into main pipeline
+## File Size Calculator
 
-The new pipeline is more efficient and produces the exact output format you requested. 
+**Estimated sizes for different targets:**
+- 2GB target → ~16,000 train + 4,000 val samples
+- 6GB target → ~40,000 train + 10,000 val samples  
+- 10GB target → ~65,000 train + 16,000 val samples
+
+**Note**: Actual sizes depend on CSV formatting overhead and available data in your NPZ files. 

@@ -103,8 +103,8 @@ Y_test = table(seq(1, N_test), labels_test+1, N_test, 10)
 
 # Get initial optimizer parameters
 optimizer_params = resnet::init_lars_optim_params(classes)
-
 # optimizer_params = resnet::init_sgd_momentum_optim_params(classes)
+# optimizer_params = resnet::init_adam_optim_params(classes)
 
 # Define image properties
 Hin = 28
@@ -112,8 +112,8 @@ Win = 28
 #N_val = 0
 
 # Define training parameters
-epochs = 30
-batch_size = 256
+epochs = 90
+batch_size = 512
 
 [accuracy, loss_metric, learned_model, learned_emas] = train(X, Y, X_test, Y_test, model, ema_means_vars, N, Hin, Win, epochs, batch_size, optimizer_params)
 
@@ -130,7 +130,7 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
     # The learning rate we want to reach AFTER warmup
     initial_lr = 0.01 
     # A very small final learning rate to decay towards
-    end_lr = 0.00001 
+    end_lr = 0.0001 
     # Number of warmup epochs, as per the paper
     warmup_epochs = 5
     # The exponent for the polynomial decay, as per the paper
@@ -140,6 +140,11 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
     momentum = 0.9
     trust_coeff = 0.001
     weight_decay = 0.0001
+    
+    # Adam optimizer hyperparameters
+    beta1 = 0.9
+    beta2 = 0.999
+    epsilon = 1e-8
     
     # Calculate total iterations for the schedule
     iterations_per_epoch = ceil(samples / batch_size)
@@ -207,8 +212,9 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_test, matr
             # Update parameters
             [model, optim_params] = resnet::update_params_with_lars(model, gradients, current_lr, momentum, weight_decay, trust_coeff,
                   optim_params)
-
-            # [model, optim_params] = resnet::update_params_with_sgd_momentum(model, gradients, lr, momentum, optim_params)
+            # [model, optim_params] = resnet::update_params_with_sgd_momentum(model, gradients, current_lr, momentum, optim_params)
+            
+            # [model, optim_params] = resnet::update_params_with_adam(model, gradients, current_lr, beta1, beta2, epsilon, current_iteration, optim_params)
         }
 
         # Reshuffle mini batches
@@ -254,7 +260,7 @@ predict = function(matrix[double] X, int Hin, int Win,
     */
     
     # Predict on test dataset
-    mode = "test"
+    mode = "train"
     [out, temp_emas, temp_cached_out, temp_cached_means_vars] = resnet::forward(X, Hin, Win, model, mode, emas)
 }
 

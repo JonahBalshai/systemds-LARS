@@ -280,7 +280,7 @@ class ImageNetPipeline:
         return {'samples': total_samples, 'data_file': combined_data_file, 'labels_file': combined_labels_file}
     
     def create_csv_samples(self, target_size_gb: float = 2.0) -> Dict:
-        """Create sampled CSV files of specified size."""
+        """Create sampled CSV files of specified size with 80:20 train/val split."""
         print(f"\n=== Creating {target_size_gb}GB CSV Samples ===")
         
         # Calculate target samples based on size
@@ -293,26 +293,34 @@ class ImageNetPipeline:
         bytes_per_label_sample = self.num_classes * 4  # One-hot as integers
         bytes_per_sample = bytes_per_data_sample + bytes_per_label_sample
         
-        target_samples = int(target_bytes / bytes_per_sample)
+        total_target_samples = int(target_bytes / bytes_per_sample)
         
-        print(f"Target size: {target_size_gb}GB")
+        # 80:20 split
+        train_target_samples = int(total_target_samples * 0.8)
+        val_target_samples = int(total_target_samples * 0.2)
+        
+        print(f"Target total size: {target_size_gb}GB")
         print(f"Estimated bytes per sample: {bytes_per_sample:,}")
-        print(f"Target samples: {target_samples:,}")
+        print(f"Total target samples: {total_target_samples:,}")
+        print(f"Train target samples (80%): {train_target_samples:,}")
+        print(f"Val target samples (20%): {val_target_samples:,}")
         
         # Create training CSV sample
-        train_csv_info = self._create_training_csv_sample(target_samples)
+        train_csv_info = self._create_training_csv_sample(train_target_samples, target_size_gb)
         
-        # Create validation CSV (smaller, use all data)
-        val_csv_info = self._create_validation_csv()
+        # Create validation CSV with proportional size
+        val_csv_info = self._create_validation_csv_sample(val_target_samples, target_size_gb)
         
         return {
             'training': train_csv_info,
             'validation': val_csv_info,
             'target_size_gb': target_size_gb,
-            'actual_samples': target_samples
+            'total_target_samples': total_target_samples,
+            'train_target_samples': train_target_samples,
+            'val_target_samples': val_target_samples
         }
-    
-    def _create_training_csv_sample(self, target_samples: int) -> Dict:
+
+    def _create_training_csv_sample(self, target_samples: int, target_size_gb: float) -> Dict:
         """Create training CSV sample from binary data."""
         combined_data_file = self.output_dir / "train_data_combined.bin"
         combined_labels_file = self.output_dir / "train_labels_combined.bin"
@@ -341,9 +349,10 @@ class ImageNetPipeline:
         data_sample = data_sample.reshape(samples_to_use, self.features)
         labels_sample = labels_sample.reshape(samples_to_use, self.num_classes)
         
-        # Save as CSV
-        train_csv_data = self.output_dir / "imagenet_train_2GB.csv"
-        train_csv_labels = self.output_dir / "imagenet_train_labels_2GB.csv"
+        # Dynamic file naming based on target size
+        size_suffix = f"{int(target_size_gb)}GB"
+        train_csv_data = self.output_dir / f"imagenet_train_{size_suffix}.csv"
+        train_csv_labels = self.output_dir / f"imagenet_train_labels_{size_suffix}.csv"
         
         print(f"Saving training data CSV: {train_csv_data.name}")
         np.savetxt(train_csv_data, data_sample, delimiter=',', fmt='%.6f')
@@ -371,27 +380,39 @@ class ImageNetPipeline:
             'labels_file': train_csv_labels,
             'size_gb': total_size_gb
         }
-    
-    def _create_validation_csv(self) -> Dict:
-        """Create validation CSV from binary data."""
+
+    def _create_validation_csv_sample(self, target_samples: int, target_size_gb: float) -> Dict:
+        """Create validation CSV sample from binary data with specified sample count."""
         val_data_file = self.output_dir / "val_data.bin"
         val_labels_file = self.output_dir / "val_labels.bin"
         
         if not val_data_file.exists():
             raise FileNotFoundError("Validation binary files not found. Run conversion first.")
         
-        print("Loading validation data...")
-        val_data = np.fromfile(val_data_file, dtype=np.float32)
-        val_labels = np.fromfile(val_labels_file, dtype=np.float32)
+        # Get total available validation samples
+        total_val_data_size = val_data_file.stat().st_size
+        total_val_samples = total_val_data_size // (self.features * 4)  # float32 = 4 bytes
         
-        # Get dimensions
-        val_samples = len(val_data) // self.features
-        val_data = val_data.reshape(val_samples, self.features)
-        val_labels = val_labels.reshape(val_samples, self.num_classes)
+        print(f"Available validation samples: {total_val_samples:,}")
         
-        # Save as CSV
-        val_csv_data = self.output_dir / "imagenet_val_2GB.csv"
-        val_csv_labels = self.output_dir / "imagenet_val_labels_2GB.csv"
+        # Use all available samples if target is larger
+        samples_to_use = min(target_samples, total_val_samples)
+        print(f"Using {samples_to_use:,} samples for validation CSV (20% of target)")
+        
+        print("Loading validation data sample...")
+        val_data = np.fromfile(val_data_file, dtype=np.float32, 
+                             count=samples_to_use * self.features)
+        val_labels = np.fromfile(val_labels_file, dtype=np.float32, 
+                               count=samples_to_use * self.num_classes)
+        
+        # Reshape
+        val_data = val_data.reshape(samples_to_use, self.features)
+        val_labels = val_labels.reshape(samples_to_use, self.num_classes)
+        
+        # Dynamic file naming based on target size
+        size_suffix = f"{int(target_size_gb)}GB"
+        val_csv_data = self.output_dir / f"imagenet_val_{size_suffix}.csv"
+        val_csv_labels = self.output_dir / f"imagenet_val_labels_{size_suffix}.csv"
         
         print(f"Saving validation data CSV: {val_csv_data.name}")
         np.savetxt(val_csv_data, val_data, delimiter=',', fmt='%.6f')
@@ -400,19 +421,21 @@ class ImageNetPipeline:
         np.savetxt(val_csv_labels, val_labels.astype(int), delimiter=',', fmt='%d')
         
         # Create metadata
-        self._create_metadata_file(val_csv_data, val_samples, self.features, "csv")
-        self._create_metadata_file(val_csv_labels, val_samples, self.num_classes, "csv")
+        self._create_metadata_file(val_csv_data, samples_to_use, self.features, "csv")
+        self._create_metadata_file(val_csv_labels, samples_to_use, self.num_classes, "csv")
         
-        # Calculate file sizes
+        # Calculate actual file sizes
         data_size_mb = val_csv_data.stat().st_size / (1024**2)
         labels_size_mb = val_csv_labels.stat().st_size / (1024**2)
         total_size_gb = (data_size_mb + labels_size_mb) / 1024
         
-        print(f"✓ Validation CSV created: {val_samples:,} samples")
+        print(f"✓ Validation CSV created: {samples_to_use:,} samples")
+        print(f"  Data file: {data_size_mb:.1f} MB")
+        print(f"  Labels file: {labels_size_mb:.1f} MB") 
         print(f"  Total size: {total_size_gb:.2f} GB")
         
         return {
-            'samples': val_samples,
+            'samples': samples_to_use,
             'data_file': val_csv_data,
             'labels_file': val_csv_labels,
             'size_gb': total_size_gb
@@ -468,7 +491,7 @@ class ImageNetPipeline:
         print(f"- Binary files and metadata in {self.output_dir}")
         
         print(f"\nNext Steps:")
-        print(f"1. Use imagenet_train_2GB.csv and imagenet_val_2GB.csv for SystemDS training")
+        print(f"1. Use imagenet_train_{int(csv_size_gb)}GB.csv and imagenet_val_{int(csv_size_gb)}GB.csv for SystemDS training")
         print(f"2. Files are ready for direct import into SystemDS")
         print(f"3. All necessary .mtd metadata files have been created")
 
