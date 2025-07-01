@@ -7,14 +7,21 @@ This script processes raw ImageNet JPG images with metadata CSV files and prepar
 for SystemDS AlexNet training. It handles:
 
 1. Reading metadata CSV files with file_path,label format
-2. Loading JPG images and keeping them at 256x256 resolution
+2. Loading JPG images (typically 256x256) and resizing to specified target size (default: 224x224)
 3. Converting to normalized feature vectors
 4. Creating one-hot encoded labels
-5. Saving in SystemDS-compatible CSV format
+5. Saving in SystemDS-compatible CSV format with resolution-based naming
 
 Usage:
-    python prepare_raw_imagenet.py --input_dir "C:/Users/romer/Desktop/Code/HuggingFace" --output_dir "imagenet_data/systemds_ready"
-    python prepare_raw_imagenet.py --input_dir "C:/Users/romer/Desktop/Code/HuggingFace" --dry_run
+    python prepare_raw_imagenet.py --input_dir "C:/Users/romer/Desktop/Big_Data/imagenet/256x256" --output_dir "imagenet_data"
+    python prepare_raw_imagenet.py --input_dir "C:/Users/romer/Desktop/Big_Data/imagenet/256x256" --target_size 299
+    python prepare_raw_imagenet.py --input_dir "path/to/imagenet" --dry_run
+
+Output files will be saved as:
+    imagenet_data/<target_size>x<target_size>/imagenet_<target_size>x<target_size>_train.csv
+    imagenet_data/<target_size>x<target_size>/imagenet_<target_size>x<target_size>_train_labels.csv
+    imagenet_data/<target_size>x<target_size>/imagenet_<target_size>x<target_size>_test.csv
+    imagenet_data/<target_size>x<target_size>/imagenet_<target_size>x<target_size>_test_labels.csv
 """
 
 import os
@@ -28,26 +35,30 @@ import time
 import gc
 from PIL import Image
 import csv
-
+java -Xmx16g -Xms16g -cp "target/systemds-3.4.0-SNAPSHOT.jar:target/lib/*" org.apache.sysds.api.DMLScript -f scripts/nn/examples/imagenet_alexnet.dml -exec singlenode
 
 class RawImageNetProcessor:
     """Raw ImageNet JPG image processor for SystemDS."""
     
-    def __init__(self, input_dir: str, output_dir: str = "imagenet_data/systemds_ready"):
+    def __init__(self, input_dir: str, output_dir: str = "imagenet_data/224x224", target_size: int = 224):
         self.input_dir = Path(input_dir)
-        self.output_dir = Path(output_dir)
+        self.target_size = target_size
+        
+        # Create output directory based on resolution
+        base_output = Path(output_dir).parent if "x" in Path(output_dir).name else Path(output_dir)
+        self.output_dir = base_output / f"{target_size}x{target_size}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Target specifications for SystemDS AlexNet
-        self.target_size = 224
         self.channels = 3
-        self.features = self.target_size * self.target_size * self.channels  # 150528
+        self.features = self.target_size * self.target_size * self.channels
         self.num_classes = 1000
         
         print(f"Raw ImageNet Processor initialized")
         print(f"Input directory: {self.input_dir}")
         print(f"Output directory: {self.output_dir}")
         print(f"Target format: {self.target_size}x{self.target_size}x{self.channels} images ({self.features} features), {self.num_classes} classes")
+        print(f"Note: Source images will be resized from their original size to {self.target_size}x{self.target_size}")
     
     def inspect_raw_data(self) -> Dict:
         """Inspect the raw data structure and return metadata."""
@@ -140,24 +151,59 @@ class RawImageNetProcessor:
         
         return dimensions
     
-    def process_dataset(self, max_samples: Optional[int] = None, dry_run: bool = False) -> Dict:
+    def process_dataset(self, max_samples: Optional[int] = None, dry_run: bool = False, skip_check: bool = False, split_from_train: bool = False) -> Dict:
         """Process the complete dataset."""
         print(f"\n=== Processing Dataset (dry_run={dry_run}) ===")
         
         # Read metadata
         train_df = pd.read_csv(self.input_dir / "imagenet_train_metadata.csv")
-        test_df = pd.read_csv(self.input_dir / "imagenet_test_metadata.csv")
         
-        # Filter to only available images
-        print("Filtering to available images...")
-        train_df = self._filter_available_images(train_df)
-        test_df = self._filter_available_images(test_df)
+        if split_from_train:
+            print("Creating validation set from training data...")
+            # Skip test metadata entirely
+            test_df = None
+        else:
+            test_df = pd.read_csv(self.input_dir / "imagenet_test_metadata.csv")
         
-        # Limit samples if requested
-        if max_samples:
-            print(f"Limiting to {max_samples} samples per split...")
-            train_df = train_df.head(max_samples)
-            test_df = test_df.head(max_samples)
+        # Filter to only available images (unless skipping)
+        if not skip_check:
+            print("Filtering to available images...")
+            train_df = self._filter_available_images(train_df)
+            if test_df is not None:
+                test_df = self._filter_available_images(test_df)
+        else:
+            print("Skipping image availability check...")
+        
+        # Handle data splitting
+        if split_from_train:
+            # Use training data for both train and validation
+            if max_samples:
+                # Take first max_samples for training
+                train_samples = max_samples
+                # Use 20% of training samples for validation (or 400, whichever is smaller)
+                val_samples = min(400, int(train_samples * 0.2), len(train_df) - train_samples)
+                
+                print(f"Splitting from training data:")
+                print(f"  - Training: first {train_samples} samples")
+                print(f"  - Validation: next {val_samples} samples")
+                
+                val_df = train_df.iloc[train_samples:train_samples + val_samples].copy()
+                train_df = train_df.head(train_samples)
+            else:
+                # Default split: 90% train, 10% validation
+                split_idx = int(len(train_df) * 0.9)
+                val_df = train_df.iloc[split_idx:].copy()
+                train_df = train_df.iloc[:split_idx].copy()
+                print(f"Splitting training data: {len(train_df)} train, {len(val_df)} validation")
+            
+            test_df = val_df  # Use validation split as "test" for consistency
+        else:
+            # Limit samples if requested
+            if max_samples:
+                print(f"Limiting to {max_samples} samples per split...")
+                train_df = train_df.head(max_samples)
+                if test_df is not None:
+                    test_df = test_df.head(max_samples)
         
         print(f"Processing {len(train_df)} training samples...")
         print(f"Processing {len(test_df)} test samples...")
@@ -193,9 +239,11 @@ class RawImageNetProcessor:
         """Process a data split (train or val)."""
         print(f"\nProcessing {split_name} split...")
         
-        # Prepare output files
-        features_file = self.output_dir / f"imagenet_{split_name}_6GB.csv"
-        labels_file = self.output_dir / f"imagenet_{split_name}_labels_6GB.csv"
+        # Prepare output files with resolution in name
+        # For val split, use 'test' in filename for consistency
+        file_split_name = 'test' if split_name == 'val' else split_name
+        features_file = self.output_dir / f"imagenet_{self.target_size}x{self.target_size}_{file_split_name}.csv"
+        labels_file = self.output_dir / f"imagenet_{self.target_size}x{self.target_size}_{file_split_name}_labels.csv"
         
         # Process images in batches to manage memory
         batch_size = 1000
@@ -283,16 +331,23 @@ class RawImageNetProcessor:
         return batch_features, batch_labels
     
     def _process_single_image(self, image_path: Path) -> List[float]:
-        """Process a single image: load, normalize, flatten."""
+        """Process a single image: load, resize, normalize, flatten."""
+        # Fix path if it points to wrong directory
+        image_path_str = str(image_path)
+        if "224x224" in image_path_str and "256x256" in str(self.input_dir):
+            # Replace 224x224 with 256x256 in the path
+            image_path_str = image_path_str.replace("224x224", "256x256")
+            image_path = Path(image_path_str)
+        
         # Load image
         with Image.open(image_path) as img:
             # Convert to RGB if needed
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             
-            # Verify image is 224x224, resize if needed
-            if img.size != (224, 224):
-                img = img.resize((224, 224), Image.LANCZOS)
+            # Resize to target size (e.g., from 256x256 to 224x224)
+            if img.size != (self.target_size, self.target_size):
+                img = img.resize((self.target_size, self.target_size), Image.LANCZOS)
             
             # Convert to numpy array and normalize to [0,1]
             img_array = np.array(img, dtype=np.float32) / 255.0
@@ -307,29 +362,43 @@ def main():
     parser = argparse.ArgumentParser(description='Process raw ImageNet JPG data for SystemDS')
     parser.add_argument('--input_dir', type=str, required=True,
                         help='Directory containing raw ImageNet data')
-    parser.add_argument('--output_dir', type=str, default='imagenet_data/systemds_ready',
-                        help='Output directory for processed data')
+    parser.add_argument('--output_dir', type=str, default='imagenet_data',
+                        help='Base output directory for processed data (resolution subdirs will be created)')
+    parser.add_argument('--target_size', type=int, default=224,
+                        help='Target image size (default: 224 for 224x224)')
     parser.add_argument('--max_samples', type=int, default=None,
                         help='Maximum number of samples per split (for testing)')
     parser.add_argument('--dry_run', action='store_true',
                         help='Just inspect data without processing')
+    parser.add_argument('--skip_check', action='store_true',
+                        help='Skip image availability checking')
+    parser.add_argument('--split_from_train', action='store_true',
+                        help='Create validation set from training data instead of using test set')
     
     args = parser.parse_args()
     
     # Initialize processor
-    processor = RawImageNetProcessor(args.input_dir, args.output_dir)
+    processor = RawImageNetProcessor(args.input_dir, args.output_dir, args.target_size)
     
-    # Inspect data first
-    try:
-        metadata = processor.inspect_raw_data()
-    except Exception as e:
-        print(f"Error during inspection: {e}")
-        return 1
+    # Inspect data first (unless skipping check)
+    if not args.skip_check:
+        try:
+            metadata = processor.inspect_raw_data()
+        except Exception as e:
+            print(f"Error during inspection: {e}")
+            return 1
+    else:
+        print("Skipping data inspection...")
     
     # Process if not dry run
     if not args.dry_run:
         try:
-            results = processor.process_dataset(max_samples=args.max_samples, dry_run=False)
+            results = processor.process_dataset(
+                max_samples=args.max_samples, 
+                dry_run=False,
+                skip_check=args.skip_check,
+                split_from_train=args.split_from_train
+            )
             print(f"\n=== Processing Complete ===")
             print(f"Results: {results}")
         except Exception as e:

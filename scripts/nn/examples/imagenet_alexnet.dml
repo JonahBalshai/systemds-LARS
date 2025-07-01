@@ -52,11 +52,19 @@ source("nn/layers/cross_entropy_loss.dml") as cross_entropy_loss
 
 # Read the ImageNet data
 fmt = "csv"
-print("Loading ImageNet data...")
-train_data = read("imagenet_data/systemds_ready/imagenet_train_6GB.csv", format=fmt)
-train_labels = read("imagenet_data/systemds_ready/imagenet_train_labels_6GB.csv", format=fmt)
-val_data = read("imagenet_data/systemds_ready/imagenet_val_6GB.csv", format=fmt)
-val_labels = read("imagenet_data/systemds_ready/imagenet_val_labels_6GB.csv", format=fmt)
+target_size = 224  # For display purposes
+
+print("Loading ImageNet data (224x224)...")
+print("Data directory: imagenet_data/224x224")
+print("")
+
+# Read the data files with constant string paths
+print("Reading training data...")
+train_data = read("imagenet_data/224x224/imagenet_224x224_train.csv", format=fmt)
+train_labels = read("imagenet_data/224x224/imagenet_224x224_train_labels.csv", format=fmt)
+print("Reading validation data...")
+val_data = read("imagenet_data/224x224/imagenet_224x224_test.csv", format=fmt)
+val_labels = read("imagenet_data/224x224/imagenet_224x224_test_labels.csv", format=fmt)
 out_dir = "scripts/nn/examples/model/imagenet_alexnet"
 
 print("Data loaded successfully.")
@@ -101,8 +109,8 @@ print("Initializing LARS optimizer...")
 optimizer_params = alexnet::init_lars_optim_params(model)
 
 # Define image properties
-Hin = 224
-Win = 224
+Hin = target_size
+Win = target_size
 C = 3
 
 # Define training parameters
@@ -135,7 +143,8 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_val, matri
             list[unknown] learned_model, list[unknown] learned_emas) {
 
     # --- HYPERPARAMETERS ---
-    initial_lr = 0.01 
+    base_batch_size = 256  # Reference batch size for LR scaling
+    initial_lr = 0.01 * (batch_size / base_batch_size)  # Linear scaling rule
     end_lr = 0.00001 
     warmup_epochs = 5
     power = 2.0
@@ -149,7 +158,7 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_val, matri
     decay_iterations = total_iterations - warmup_iterations
 
     print("LARS Configuration:")
-    print("- Initial LR: " + initial_lr)
+    print("- Base LR: " + (0.01) + " (scaled to " + initial_lr + " for batch size " + batch_size + ")")
     print("- End LR: " + end_lr)
     print("- Warmup epochs: " + warmup_epochs)
     print("- Momentum: " + momentum)
@@ -192,8 +201,12 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_val, matri
             } else { 
                 [out, cached_out] = alexnet::forward(X_batch, C, Hin, Win, model, "train", 0.5) 
             }
-            loss = cross_entropy_loss::forward(out, Y_batch)
+            
+            # Compute loss with L2 regularization
+            loss = alexnet::compute_loss(out, Y_batch, model, weight_decay)
             loss_avg = (loss_avg * (i - 1) + loss) / i
+            
+            # Backward pass
             dOut = cross_entropy_loss::backward(out, Y_batch)
             if (use_bn) { 
                 [dX, gradients] = alexnet::backward_with_bn(dOut, cached_out, model, C, Hin, Win, 0.5) 
@@ -201,8 +214,7 @@ train = function(matrix[double] X, matrix[double] Y, matrix[double] X_val, matri
                 [dX, gradients] = alexnet::backward(dOut, cached_out, model, C, Hin, Win, 0.5) 
             }
             
-            # [THE FIX] The manual weight decay loop is REMOVED.
-            # We pass the pure gradients and the real weight_decay value to the updater.
+            # Update with LARS (weight decay is handled internally by LARS)
             [model, optim_params] = alexnet::update_params_with_lars(
                 model, gradients, current_lr, momentum, weight_decay, 
                 trust_coeff, optim_params)

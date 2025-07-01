@@ -52,34 +52,30 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double mu,
   # L2 norm of the parameters (weights)
   X_norm = sqrt(sum(X^2));
   
-  # Gradient with weight decay. This is ONLY used to calculate the LARS ratio.
-  # The pure dX will be used for the momentum update.
+  # Step 1: Combine gradient and weight decay term.
   grad_with_decay = dX + lambda * X;
+  
+  # Step 2: Calculate the L2 norm of the combined term.
   grad_with_decay_norm = sqrt(sum(grad_with_decay^2));
   
-  # Epsilon for numerical stability
   epsilon = 1e-8;
   
-  # Compute local learning rate according to the LARS paper
-  # This is the CORRECT way to calculate the denominator.
+  # Step 3: Compute local learning rate using the correct norms.
   local_lr = trust_coeff * X_norm / (grad_with_decay_norm + epsilon);
   
-  # Scale by the global learning rate
+  # Step 4: Scale by the global learning rate.
   effective_lr = lr * local_lr;
   
-  # For very small layers (like biases), skip LARS and use the global learning rate.
-  # This is a common practice for stability.
-  # Note: ncol(X)==1 is a good heuristic for identifying bias vectors.
+  # Step 5: For biases or very small layers, use the global LR for stability.
   if (X_norm < 1e-5 | ncol(X) == 1) {
     effective_lr = lr;
   }
   
-  # Momentum update using the PURE gradient (dX)
-  v_upd = mu * v + effective_lr * dX;
+  # Step 6: Perform the momentum update using the combined gradient.
+  v_upd = mu * v + effective_lr * grad_with_decay;
   
-  # Decoupled weight decay: Update parameters using the momentum buffer
-  # AND subtracting the weight decay term separately.
-  X_upd = X - v_upd - lr * lambda * X;
+  # Step 7: Update the parameters.
+  X_upd = X - v_upd;
 }
 
 init = function(matrix[double] X)
