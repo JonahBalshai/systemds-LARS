@@ -25,6 +25,7 @@
 
 update = function(matrix[double] X, matrix[double] dX, double lr, double mu, 
                   matrix[double] v, double lambda, double trust_coeff)
+
     return (matrix[double] X_upd, matrix[double] v_upd) {
   /*
    * Performs a LARS update with decoupled weight decay.
@@ -76,6 +77,7 @@ update = function(matrix[double] X, matrix[double] dX, double lr, double mu,
   
   # Step 7: Update the parameters.
   X_upd = X - v_upd;
+
 }
 
 init = function(matrix[double] X)

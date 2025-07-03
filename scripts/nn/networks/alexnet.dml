@@ -1131,7 +1131,6 @@ backward_with_bn = function(matrix[double] dOut, list[unknown] cached_out,
                    dW5, db5, dgamma5, dbeta5, matrix(0, rows=nrow(dgamma5), cols=ncol(dgamma5)), matrix(0, rows=nrow(dgamma5), cols=ncol(dgamma5)),
                    dW6, db6, dW7, db7, dW8, db8)
 }
-
 evaluate_with_bn = function(matrix[double] X, matrix[double] Y, int C, int Hin, int Win,
                            list[unknown] model, int batch_size)
     return (double loss, double accuracy) {
