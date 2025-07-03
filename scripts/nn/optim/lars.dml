@@ -25,57 +25,59 @@
 
 update = function(matrix[double] X, matrix[double] dX, double lr, double mu, 
                   matrix[double] v, double lambda, double trust_coeff)
-    return (matrix[double] X_upd, matrix[double] v_upd) {
+    return (matrix[double] X, matrix[double] v) {
   /*
-   * Performs a LARS update with decoupled weight decay.
+   * Performs a LARS update with layer-wise adaptive learning rate.
    *
-   * This corrected version fixes two key issues:
-   * 1. It correctly calculates the LARS denominator as the norm of the sum,
-   *    not the sum of the norms.
-   * 2. It uses decoupled weight decay, which is more stable with adaptive
-   *    learning rates.
+   * Reference:
+   * - Large Batch Training of Convolutional Networks
+   *   https://arxiv.org/abs/1708.03888
+   *
+   * The LARS algorithm adapts the learning rate for each layer by 
+   * computing a local learning rate based on the ratio between the
+   * L2 norm of the weights and the L2 norm of the gradients.
    *
    * Inputs:
-   *  - X: Parameters to update.
-   *  - dX: Gradient of the loss function w.r.t. X.
+   *  - X: Parameters to update, of shape (any, any).
+   *  - dX: Gradient of the loss function w.r.t. X, of same shape as X.
    *  - lr: Global learning rate.
    *  - mu: Momentum coefficient.
-   *  - v: Velocity (momentum state).
+   *  - v: Velocity (momentum state), of same shape as X.
    *  - lambda: L2 regularization strength (weight decay).
    *  - trust_coeff: Trust coefficient for LARS (typically 0.001).
    *
    * Outputs:
-   *  - X_upd: Updated parameters.
-   *  - v_upd: Updated velocity.
+   *  - X: Updated parameters X, of same shape as input X.
+   *  - v: Updated velocity, of same shape as input v.
    */
+  # Add weight decay to gradient
+  dX_wd = dX + lambda * X
   
-  # L2 norm of the parameters (weights)
-  X_norm = sqrt(sum(X^2));
+  # Compute L2 norms
+  X_norm = sqrt(sum(X^2))
+  dX_norm = sqrt(sum(dX^2))  # Use gradient norm WITHOUT weight decay for LARS computation
   
-  # Step 1: Combine gradient and weight decay term.
-  grad_with_decay = dX + lambda * X;
+  # Compute local learning rate according to LARS paper
+  # The exact formula from the paper is:
+  # local_lr = trust_coeff * ||w|| / ||∇L(w)||
+  # where trust_coeff (η) is typically 0.001
+  epsilon = 1e-8
+  local_lr = trust_coeff * X_norm / (dX_norm + epsilon)
   
-  # Step 2: Calculate the L2 norm of the combined term.
-  grad_with_decay_norm = sqrt(sum(grad_with_decay^2));
+  # Apply global learning rate scaling
+  # The paper mentions that for bias and BN parameters, they skip LARS
+  effective_lr = lr * local_lr
   
-  epsilon = 1e-8;
-  
-  # Step 3: Compute local learning rate using the correct norms.
-  local_lr = trust_coeff * X_norm / (grad_with_decay_norm + epsilon);
-  
-  # Step 4: Scale by the global learning rate.
-  effective_lr = lr * local_lr;
-  
-  # Step 5: For biases or very small layers, use the global LR for stability.
-  if (X_norm < 1e-5 | ncol(X) == 1) {
-    effective_lr = lr;
+  # For very small layers (like biases), skip LARS and use regular SGD
+  # This follows the paper's recommendation for bias terms
+  if (X_norm < 1e-3 | ncol(X) == 1) {  # Check for small params or bias vectors
+    effective_lr = lr  # Use global lr for small parameters (like biases)
   }
   
-  # Step 6: Perform the momentum update using the combined gradient.
-  v_upd = mu * v + effective_lr * grad_with_decay;
-  
-  # Step 7: Update the parameters.
-  X_upd = X - v_upd;
+  # SGD with momentum update using the adaptive learning rate
+  # Note: We still use dX_wd (gradient with weight decay) for the actual update
+  v = mu * v - effective_lr * dX_wd
+  X = X + v
 }
 
 init = function(matrix[double] X)
