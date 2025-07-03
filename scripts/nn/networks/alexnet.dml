@@ -639,7 +639,7 @@ init_with_bn = function(int C, int Hin, int Win, int num_classes, int seed)
   [gamma3, beta3, ema_mean3, ema_var3] = batch_norm2d::init(384)
   [gamma4, beta4, ema_mean4, ema_var4] = batch_norm2d::init(384)
   [gamma5, beta5, ema_mean5, ema_var5] = batch_norm2d::init(256)
-
+  
   # --- Explicit AlexNet weight init for FC layers ---
   # FC1: fc_input_size → 4096
   W6 = rand(rows=fc_input_size, cols=4096, pdf="normal", seed=seed) * 0.01
